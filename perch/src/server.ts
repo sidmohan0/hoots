@@ -31,7 +31,13 @@ export function buildServer() {
   app.addHook("onRequest", async (req, reply) => {
     startedAt.set(req, performance.now());
     if (req.url === "/v1/health" || req.url === "/v1/openapi.json") return;
-    if (req.url === "/" || req.url.startsWith("/assets/") || req.url === "/appicon.png" || req.url.startsWith("/v1/stream")) return; // UI is same-origin local
+    if (
+      req.url === "/" ||
+      req.url.startsWith("/assets/") ||
+      req.url.startsWith("/v1/stream") ||
+      ["/appicon.png", "/manifest.webmanifest", "/sw.js", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png", "/apple-touch-icon.png"].includes(req.url.split("?")[0])
+    )
+      return; // UI is same-origin local
     const auth = req.headers.authorization;
     if (auth !== `Bearer ${config.authToken}`) {
       return reply.code(401).send({ error: "unauthorized" });
@@ -420,6 +426,23 @@ export function buildServer() {
     if (!existsSync(file)) return reply.code(404).send();
     reply.type("image/png").send(readFileSync(file));
   });
+  const staticRoots: Record<string, string> = {
+    "/manifest.webmanifest": "manifest.webmanifest",
+    "/sw.js": "sw.js",
+    "/icon-192.png": "icon-192.png",
+    "/icon-512.png": "icon-512.png",
+    "/icon-maskable-512.png": "icon-maskable-512.png",
+    "/apple-touch-icon.png": "apple-touch-icon.png",
+  };
+  for (const [route, file] of Object.entries(staticRoots)) {
+    app.get(route, async (_req, reply) => {
+      const full = path.join(uiDir, file);
+      if (!existsSync(full)) return reply.code(404).send();
+      const type = file.endsWith(".webmanifest") ? "application/manifest+json"
+        : file.endsWith(".js") ? "text/javascript" : "image/png";
+      reply.type(type).send(readFileSync(full));
+    });
+  }
   app.get("/assets/*", async (req, reply) => {
     const rel = (req.params as any)["*"];
     const file = path.join(uiDir, "assets", rel);
