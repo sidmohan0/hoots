@@ -206,8 +206,11 @@ db.exec(`CREATE TABLE IF NOT EXISTS queued_turns (
   thread_id TEXT NOT NULL REFERENCES threads(id),
   message TEXT NOT NULL,
   surface TEXT NOT NULL DEFAULT 'web',
+  miss_note INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 )`);
+// Older databases predate the one-note-per-day flag.
+addColumn("queued_turns", "miss_note INTEGER NOT NULL DEFAULT 0", "miss_note");
 
 db.exec(`CREATE TABLE IF NOT EXISTS read_state (
   hoot_id TEXT NOT NULL REFERENCES hoots(id),
@@ -232,6 +235,14 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_runs_hoot_day ON automation_runs(hoot_id
 export const LATE_GRACE_MS = 15 * 60_000;
 
 export type RunOutcome = "sent" | "late" | "missed" | "skipped";
+
+/** At most one "sorry I'm late" note per hoot per local day (#10). */
+export function claimMissNote(hootId: string, epochMs: number = Date.now()): boolean {
+  const key = `missnote:${hootId}:${localDate(epochMs)}`;
+  if (getMeta(key) !== null) return false;
+  setMeta(key, String(epochMs));
+  return true;
+}
 
 export function recordAutomationRun(r: {
   automationId: string;

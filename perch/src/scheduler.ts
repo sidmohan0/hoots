@@ -1,7 +1,7 @@
 import rrulePkg from "rrule";
 // rrule ships CJS without an exports map; destructure via default interop.
 const { RRule } = rrulePkg as any;
-import { db, now, uuid, LATE_GRACE_MS, recordAutomationRun } from "./db.js";
+import { db, now, uuid, LATE_GRACE_MS, recordAutomationRun, claimMissNote } from "./db.js";
 import { startTurn } from "./turns.js";
 import { bus } from "./stream.js";
 
@@ -131,15 +131,21 @@ export async function tickScheduler(deliverFn?: (hootId: string, text: string) =
       });
       continue;
     }
+    const late = firedAt - scheduledAt > LATE_GRACE_MS;
+    // Boot catch-ups still fire — they are late, never missed — but only one
+    // apology note per hoot per day is allowed to reach the conversation (#10).
+    const missNote = late && claimMissNote(a.hoot_id, firedAt);
     try {
-      const turnId = await startTurn({ threadId: thread.id, trigger: "automation", message: a.prompt });
+      const turnId = await startTurn({
+        threadId: thread.id, trigger: "automation", message: a.prompt, missNote,
+      });
       // The run log is written only once the fire actually happened (#10).
       recordAutomationRun({
         automationId: a.id,
         hootId: a.hoot_id,
         scheduledAt,
         firedAt,
-        outcome: firedAt - scheduledAt <= LATE_GRACE_MS ? "sent" : "late",
+        outcome: late ? "late" : "sent",
       });
       bus.publish({ event: "automation.fired", data: { automation_id: a.id, turn_id: turnId } });
       if (a.deliver && deliverFn) {

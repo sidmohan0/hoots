@@ -19,7 +19,10 @@ function boughItemCount(hootId: string): number {
 
 // --- context assembly ------------------------------------------------------
 
-function buildMessages(hoot: any, thread: any, userText: string | null) {
+const MISS_NOTE =
+  "You were late because the machine was asleep; open with one short apology, then continue.";
+
+function buildMessages(hoot: any, thread: any, userText: string | null, missNote = false) {
   const history = db
     .prepare(
       `SELECT kind, role, content FROM items WHERE thread_id = ?
@@ -33,6 +36,7 @@ function buildMessages(hoot: any, thread: any, userText: string | null) {
   const systemParts = [hoot.system_prompt];
   const memory = pelletContextBlock(hoot.id);
   if (memory) systemParts.push(memory);
+  if (missNote) systemParts.push(MISS_NOTE);
   messages.push({ role: "system", content: systemParts.join("\n\n") });
   for (const h of history) {
     const c = JSON.parse(h.content);
@@ -86,6 +90,7 @@ export async function startTurn(opts: {
   trigger: "user" | "automation" | "channel" | "tool";
   message?: string | null;
   surface?: "web" | "telegram" | "system";
+  missNote?: boolean;
 }): Promise<{ turnId: string; queued: boolean }> {
   const thread = db.prepare("SELECT * FROM threads WHERE id = ?").get(opts.threadId) as any;
   if (!thread) throw new Error(`thread ${opts.threadId} not found`);
@@ -99,8 +104,8 @@ export async function startTurn(opts: {
   } catch {
     // Composer never blocks (DECISIONS.md #6): queue it; it starts when the
     // in-flight turn lands.
-    db.prepare(`INSERT INTO queued_turns (id, thread_id, message, surface, created_at) VALUES (?, ?, ?, ?, ?)`)
-      .run(uuid(), thread.id, opts.message ?? "", opts.surface ?? "web", now());
+    db.prepare(`INSERT INTO queued_turns (id, thread_id, message, surface, miss_note, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(uuid(), thread.id, opts.message ?? "", opts.surface ?? "web", opts.missNote ? 1 : 0, now());
     return { turnId: "", queued: true };
   }
 
@@ -115,7 +120,7 @@ export async function startTurn(opts: {
   bus.publish({ event: "turn.status", data: { turn_id: turnId, status: "in_progress" } });
 
   // execute async; API returns turn id immediately
-  executeTurn(turnId, hoot, thread).finally(() => drainQueue(thread.id)).catch((err) => {
+  executeTurn(turnId, hoot, thread, opts.missNote ?? false).finally(() => drainQueue(thread.id)).catch((err) => {
     const msg = String(err?.message ?? err);
     releaseTurn(thread.id, turnId, "interrupted", msg);
     bus.publish({ event: "turn.status", data: { turn_id: turnId, status: "interrupted", error: msg } });
@@ -132,11 +137,13 @@ async function drainQueue(threadId: string) {
   if (!next) return;
   db.prepare(`DELETE FROM queued_turns WHERE id = ?`).run(next.id);
   try {
-    await startTurn({ threadId, trigger: "user", message: next.message, surface: next.surface as any });
+    await startTurn({
+      threadId, trigger: "user", message: next.message, surface: next.surface as any, missNote: !!next.miss_note,
+    });
   } catch {
     // re-queue if the thread is somehow busy again
-    db.prepare(`INSERT INTO queued_turns (id, thread_id, message, surface, created_at) VALUES (?, ?, ?, ?, ?)`)
-      .run(uuid(), threadId, next.message, next.surface, now());
+    db.prepare(`INSERT INTO queued_turns (id, thread_id, message, surface, miss_note, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(uuid(), threadId, next.message, next.surface, next.miss_note ?? 0, now());
   }
 }
 
@@ -146,7 +153,7 @@ export async function drainAllQueues() {
   for (const r of rows) await drainQueue(r.thread_id);
 }
 
-async function executeTurn(turnId: string, hoot: any, thread: any) {
+async function executeTurn(turnId: string, hoot: any, thread: any, missNote = false) {
   let seq = (db.prepare(`SELECT COALESCE(MAX(seq),0) AS m FROM items WHERE turn_id = ?`).get(turnId) as any).m;
 
   const model: ModelConfig = {
@@ -159,7 +166,7 @@ async function executeTurn(turnId: string, hoot: any, thread: any) {
   const lastUser = db
     .prepare(`SELECT content FROM items WHERE turn_id = ? AND role = 'user' ORDER BY seq DESC LIMIT 1`)
     .get(turnId) as any;
-  const messages = buildMessages(hoot, thread, lastUser ? JSON.parse(lastUser.content).text : null);
+  const messages = buildMessages(hoot, thread, lastUser ? JSON.parse(lastUser.content).text : null, missNote);
 
   await runTurn(model, messages, builtInTools(), ctx, {
     onItem: (item) => {
