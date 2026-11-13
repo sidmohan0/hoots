@@ -1,25 +1,8 @@
 /* Parliament — styled entirely from design tokens (docs/design-tokens.json). */
 
-/* Token bridge: the compiled sheet emits camelCase colour vars (--c-textMuted,
-   --c-lineStrong, …). These aliases expose the kebab spelling the rest of this
-   file (and the boards) use, so every rule stays token-only. */
-:root {
-  --c-bg-sunken: var(--c-bgSunken);
-  --c-surface-raised: var(--c-surfaceRaised);
-  --c-line-strong: var(--c-lineStrong);
-  --c-text-soft: var(--c-textSoft);
-  --c-text-muted: var(--c-textMuted);
-  --c-bubble-hoot: var(--c-bubbleHoot);
-  --c-bubble-you: var(--c-bubbleYou);
-  --c-accent-text: var(--c-accentText);
-  --c-accent-wash: var(--c-accentWash);
-  --c-accent-line: var(--c-accentLine);
-  --c-quiet-wash: var(--c-quietWash);
-  --c-chrome-text: var(--c-chromeText);
-  /* the compiled cubicBezier token is a bare list ("0.2,0,0,1"); wrap it so it
-     is usable as a CSS timing function */
-  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
-}
+/* All custom properties come from src/tokens.ts (docs/design-tokens.json).
+   This one alias exists because boards and rules speak of a standard easing. */
+:root { --ease-standard: var(--motion-easing-standard); }
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
