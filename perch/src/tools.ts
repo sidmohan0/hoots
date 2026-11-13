@@ -1,12 +1,53 @@
 import { db, now, uuid } from "./db.js";
 import type { ToolDef } from "./model.js";
 
-// v1 built-in talons (tools). Keyword recall + pin-to-pellet.
+// Full-text recall over the hoot's bough history (messages + pinned notes),
+// backed by the items_fts FTS5 index. Falls back to a plain LIKE scan if FTS
+// errors out or matches nothing.
+
+// Sanitize a user query into safe FTS5 syntax: split on whitespace and wrap
+// each token in double quotes so operators/punctuation never break the parse.
+function ftsMatchQuery(query: string): string {
+  return query
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((t) => `"${t.replace(/"/g, "")}"`)
+    .join(" ");
+}
+
+const RECALL_LIMIT = 10;
+
+function likeRecall(hootId: string, query: string) {
+  return db
+    .prepare(
+      `SELECT i.content, i.created_at FROM items i
+       JOIN threads t ON t.id = i.thread_id
+       WHERE t.hoot_id = ? AND i.kind IN ('message','note')
+         AND lower(i.content) LIKE '%' || lower(?) || '%'
+       ORDER BY i.created_at DESC LIMIT ${RECALL_LIMIT}`
+    )
+    .all(hootId, query);
+}
+
+function ftsRecall(hootId: string, match: string) {
+  return db
+    .prepare(
+      `SELECT i.content, i.created_at FROM items_fts
+       JOIN items i ON i.id = items_fts.item_id
+       JOIN threads t ON t.id = i.thread_id
+       WHERE items_fts MATCH ? AND t.hoot_id = ?
+       ORDER BY bm25(items_fts) LIMIT ${RECALL_LIMIT}`
+    )
+    .all(match, hootId);
+}
+
+// v1 built-in talons (tools). Full-text recall + pin-to-pellet.
 export function builtInTools(): ToolDef[] {
   return [
     {
       name: "recall",
-      description: "Search the hoot's memory (its primary thread) for items matching a keyword query.",
+      description:
+        "Search the hoot's conversation history (its primary thread and pinned notes) for past messages and facts matching a keyword query.",
       parameters: {
         type: "object",
         properties: {
@@ -15,15 +56,16 @@ export function builtInTools(): ToolDef[] {
         required: ["query"],
       },
       execute: (args: { query: string }, ctx) => {
-        const rows = db
-          .prepare(
-            `SELECT i.content, i.created_at FROM items i
-             JOIN threads t ON t.id = i.thread_id
-             WHERE t.hoot_id = ? AND i.kind = 'message'
-               AND lower(i.content) LIKE '%' || lower(?) || '%'
-             ORDER BY i.created_at DESC LIMIT 10`
-          )
-          .all(ctx.hootId, args.query);
+        let rows: any[] = [];
+        const match = ftsMatchQuery(args.query ?? "");
+        if (match) {
+          try {
+            rows = ftsRecall(ctx.hootId, match) as any[];
+          } catch {
+            rows = []; // malformed index or query — fall through to LIKE
+          }
+        }
+        if (!rows.length) rows = likeRecall(ctx.hootId, args.query ?? "") as any[];
         return rows.map((r: any) => ({ at: r.created_at, ...JSON.parse(r.content) }));
       },
     },
