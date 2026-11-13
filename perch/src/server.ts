@@ -12,6 +12,9 @@ import { bus } from "./stream.js";
 import { bindChannel, channelForChat } from "./herald-telegram.js";
 
 type Post = { body: any; params: any; query: any };
+
+// Composer guard: empty turns are a no-op and runaway pastes blow the context.
+const MAX_MESSAGE_CHARS = 32 * 1024;
 type Reply = { code: (c: number) => { send: (x: unknown) => unknown } };
 
 export function buildServer() {
@@ -71,6 +74,14 @@ export function buildServer() {
     const thread = db.prepare("SELECT * FROM threads WHERE id = ?").get(req.params.id) as any;
     if (!thread) return reply.code(404).send({ error: "not found" });
     const message: string | undefined = req.body?.message;
+    if (message !== undefined) {
+      if (typeof message !== "string" || !message.trim()) {
+        return reply.code(400).send({ error: "message must not be empty" });
+      }
+      if (message.length > MAX_MESSAGE_CHARS) {
+        return reply.code(400).send({ error: `message over ${MAX_MESSAGE_CHARS} characters` });
+      }
+    }
     const surface: "web" | "telegram" | "system" | "silent" = (req.body?.surface as any) ?? "web";
     try {
       const { turnId, queued, queueId } = await startTurn({
