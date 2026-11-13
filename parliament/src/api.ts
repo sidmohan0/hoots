@@ -25,6 +25,7 @@ export const api = {
   patchHoot: (id: string, body: any) => req<any>(`/v1/hoots/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   threads: (hootId: string) => req<any[]>(`/v1/hoots/${hootId}/threads`),
   items: (threadId: string) => req<any[]>(`/v1/threads/${threadId}/items`),
+  item: (id: string) => req<any>(`/v1/items/${id}`),
   send: (threadId: string, message: string, surface = "web") =>
     req<{ turn_id: string; queued: boolean }>(`/v1/threads/${threadId}/turns`, {
       method: "POST",

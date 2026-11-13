@@ -109,6 +109,12 @@ export function buildServer() {
     return { ok: true };
   });
 
+  app.get("/v1/items/:id", async (req: Post, reply: Reply) => {
+    const item = db.prepare("SELECT * FROM items WHERE id = ?").get(req.params.id);
+    if (!item) return reply.code(404).send({ error: "not found" });
+    return item;
+  });
+
   app.get("/v1/threads/:id/items", async (req: Post) =>
     db.prepare("SELECT * FROM items WHERE thread_id = ? ORDER BY created_at, seq").all(req.params.id));
   app.get("/v1/turns/:id/items", async (req: Post) =>

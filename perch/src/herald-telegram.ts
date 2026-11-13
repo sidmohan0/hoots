@@ -21,14 +21,83 @@ export function channelForChat(chatId: string) {
     .get(String(chatId)) as any;
 }
 
-export async function sendMessage(chatId: string, text: string, token: string) {
-  const body = JSON.stringify({ chat_id: chatId, text });
-  logOutbound("telegram", `reply → chat ${chatId}`, body.length);
-  await fetch(API(token, "sendMessage"), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body,
-  });
+// --- markdown → Telegram HTML (small sanitized subset) ----------------------
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+export function toTelegramHtml(md: string): string {
+  const blocks = md.split(/```/);
+  return blocks
+    .map((block, i) => {
+      if (i % 2 === 1) return `<pre>${esc(block.replace(/^\w*\n/, ""))}</pre>`;
+      let t = esc(block);
+      t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+      t = t.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+      t = t.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<i>$2</i>");
+      t = t.replace(/^&gt; ?(.*)$/gm, "<blockquote>$1</blockquote>");
+      t = t.replace(/^[-•] (.*)$/gm, "• $1");
+      t = t.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2">$1</a>');
+      return t;
+    })
+    .join("");
+}
+
+// Telegram caps messages at 4096 chars; split on line/paragraph edges.
+export function chunk(text: string, limit = 3900): string[] {
+  if (text.length <= limit) return [text];
+  const out: string[] = [];
+  let rest = text;
+  while (rest.length > limit) {
+    const window = rest.slice(0, limit);
+    const cut = Math.max(window.lastIndexOf("\n\n"), window.lastIndexOf("\n"), window.lastIndexOf(". "));
+    const at = cut > limit * 0.5 ? cut + 1 : limit;
+    out.push(rest.slice(0, at).trimEnd());
+    rest = rest.slice(at).trimStart();
+  }
+  if (rest) out.push(rest);
+  return out;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Send with 429 retry_after honouring and 5xx backoff (max 3 tries). */
+export async function sendMessage(chatId: string, markdown: string, token: string) {
+  const parts = chunk(markdown);
+  for (const [i, part] of parts.entries()) {
+    const body = JSON.stringify({
+      chat_id: chatId,
+      text: parts.length > 1 ? `${part}\n\n(${i + 1}/${parts.length})` : part,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    });
+    logOutbound("telegram", `reply → chat ${chatId}`, body.length);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const res = await fetch(API(token, "sendMessage"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+      if (res.ok) break;
+      const err: any = await res.json().catch(() => ({}));
+      if (res.status === 429) {
+        await sleep(Math.min(30_000, ((err?.parameters?.retry_after ?? 2) + 1) * 1000));
+        continue;
+      }
+      if (res.status >= 500 && attempt < 3) {
+        await sleep(attempt * 750);
+        continue;
+      }
+      // parse_mode regression safety: retry once as plain text
+      if (res.status === 400 && attempt === 1) {
+        await fetch(API(token, "sendMessage"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ chat_id: chatId, text: part }),
+        }).catch(() => {});
+      }
+      break;
+    }
+    if (parts.length > 1) await sleep(120);
+  }
 }
 
 export function startTelegramHerald(token: string) {
@@ -54,9 +123,14 @@ export function startTelegramHerald(token: string) {
       const parsed = typeof raw === "string" ? (() => { try { return JSON.parse(raw); } catch { return {}; } })() : raw;
       const text = parsed?.text;
       if (text) {
-        await sendMessage(ch.external_id, text, token).catch(() => {});
-        db.prepare(`UPDATE items SET delivered = CASE WHEN delivered = '' THEN 'telegram' ELSE delivered || ',telegram' END WHERE id = ?`)
-          .run(item.id);
+        // While a web tab is focused (read within 60s), don't buzz the phone.
+        const rs = db.prepare(`SELECT last_read_at FROM read_state WHERE hoot_id = ? AND surface = 'web'`).get(thread.hoot_id) as any;
+        const webFocused = rs?.last_read_at && Date.now() - rs.last_read_at < 60_000;
+        if (!webFocused) {
+          await sendMessage(ch.external_id, text, token).catch(() => {});
+          db.prepare(`UPDATE items SET delivered = CASE WHEN delivered = '' THEN 'telegram' ELSE delivered || ',telegram' END WHERE id = ?`)
+            .run(item.id);
+        }
       }
     }
   });

@@ -316,6 +316,24 @@ export function App() {
       .catch(() => toast("That didn't go through · try again", { label: "retry", run: () => factAction(run) }));
   };
 
+  const jumpToItem = (itemId: string) => {
+    const existing = items.find((i) => i.id === itemId);
+    const focus = () => {
+      const el = document.getElementById(`item-${itemId}`);
+      el?.scrollIntoView({ block: "center", behavior: "smooth" });
+      el?.classList.add("hl");
+      setTimeout(() => el?.classList.remove("hl"), 1600);
+    };
+    if (existing) return focus();
+    api
+      .item(itemId)
+      .then((it) => {
+        setItems((prev) => (prev.some((p) => p.id === it.id) ? prev : [...prev, it].sort((a, b) => a.created_at - b.created_at)));
+        setTimeout(focus, 60);
+      })
+      .catch(() => toast("Couldn't find the source of that fact"));
+  };
+
   const hootName = hoots.find((h) => h.id === hootId())?.name ?? "Hoot";
   const state: PresenceState =
     thinking ? "thinking" : stream.status === "quiet" ? "quiet" : (presence?.status as PresenceState) ?? "awake";
@@ -375,15 +393,15 @@ export function App() {
         </button>
       )}
 
-      <Drawer side="right" open={drawer === "memory"} onClose={() => setDrawer(null)} label="Memory">
-        <Memory facts={facts} hootName={hootName} highlight={route.fact} onConfirm={(id) => factAction(() => api.confirmFact(id))} onForget={(id) => factAction(() => api.forgetFact(id))} onEdit={(id, text) => factAction(() => api.editFact(id, text))} />
+      <Drawer side="right" persistOnWide open={drawer === "memory"} onClose={() => setDrawer(null)} label="Memory">
+        <Memory facts={facts} hootName={hootName} highlight={route.fact} onJump={jumpToItem} onConfirm={(id) => factAction(() => api.confirmFact(id))} onForget={(id) => factAction(() => api.forgetFact(id))} onEdit={(id, text) => factAction(() => api.editFact(id, text))} />
       </Drawer>
       <Drawer side="right" open={drawer === "promises"} onClose={() => setDrawer(null)} label="Promises">
         <Promises automations={automations} hootId={hootId()} runs={runs} onToggle={(id, enabled) => factAction(() => api.patchAutomation(id, { enabled }))} />
       </Drawer>
 
       <footer className="machine">
-        <button className={drawer === "memory" ? "on" : ""} onClick={() => setDrawer(drawer === "memory" ? null : "memory")}>
+        <button className={"mem-toggle" + (drawer === "memory" ? " on" : "")} onClick={() => setDrawer(drawer === "memory" ? null : "memory")}>
           memory
         </button>
         <button className={drawer === "promises" ? "on" : ""} onClick={() => setDrawer(drawer === "promises" ? null : "promises")}>
@@ -684,7 +702,7 @@ function ItemRow({ item }: { item: Item }) {
   if (item.kind !== "message") return null;
   const mine = item.role === "user";
   return (
-    <div className={`item ${mine ? "mine" : "theirs"}`}>
+    <div className={`item ${mine ? "mine" : "theirs"}`} id={`item-${item.id}`}>
       <div className="bubble">
         {mine ? <p className="plain">{String(c.text ?? "")}</p> : <Markdown text={String(c.text ?? "")} />}
       </div>
@@ -759,10 +777,11 @@ function Composer({
 }
 
 // --- drawers ------------------------------------------------------------------
-function Drawer({ side, open, onClose, label, children }: any) {
-  if (!open) return null;
+function Drawer({ side, open, persistOnWide, onClose, label, children }: any) {
+  if (!open && !persistOnWide) return null;
+  const hidden = persistOnWide && !open ? " drawer-collapsed" : "";
   return (
-    <aside className={`drawer drawer-${side}`} role="dialog" aria-label={label}>
+    <aside className={`drawer drawer-${side}${hidden}`} role="dialog" aria-label={label}>
       <header className="drawer-head">
         <h3>{label}</h3>
         <button className="ghost" onClick={onClose}>
@@ -778,6 +797,7 @@ function Memory({
   facts,
   hootName,
   highlight,
+  onJump,
   onConfirm,
   onForget,
   onEdit,
@@ -785,6 +805,7 @@ function Memory({
   facts: Fact[];
   hootName: string;
   highlight: string | null;
+  onJump: (itemId: string) => void;
   onConfirm: (id: string) => void;
   onForget: (id: string) => void;
   onEdit: (id: string, text: string) => void;
@@ -800,6 +821,22 @@ function Memory({
   }, [facts.length]);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const groups: { label: string; rows: Fact[] }[] = useMemo(() => {
+    const week: Fact[] = [];
+    const people: Fact[] = [];
+    const ongoing: Fact[] = [];
+    const weekAgo = Date.now() - 7 * 86_400_000;
+    for (const f of facts) {
+      if (f.category === "person") people.push(f);
+      else if (f.created_at >= weekAgo) week.push(f);
+      else ongoing.push(f);
+    }
+    return [
+      { label: "THIS WEEK", rows: week },
+      { label: "PEOPLE", rows: people },
+      { label: "ONGOING", rows: ongoing },
+    ].filter((g) => g.rows.length);
+  }, [facts]);
   return (
     <div>
       {summary && (
@@ -809,8 +846,11 @@ function Memory({
         </section>
       )}
       <p className="label">FACTS · {facts.length}</p>
+      {groups.map((g) => (
+      <section key={g.label}>
+      <p className="label">{g.label}</p>
       <ul className="facts">
-        {facts.map((f) => (
+        {g.rows.map((f) => (
           <li id={`fact-${f.id}`} key={f.id} className={`fact ${f.confidence === "extracted" ? "guess" : ""}${highlight === f.id ? " hl" : ""}`}>
             {editing === f.id ? (
               <input
@@ -826,7 +866,12 @@ function Memory({
                 }}
               />
             ) : (
-              <p className="fact-text">
+              <p
+                className="fact-text"
+                title={f.source_item_id ? "jump to source" : undefined}
+                onClick={() => f.source_item_id && onJump(f.source_item_id)}
+                style={f.source_item_id ? { cursor: "pointer" } : undefined}
+              >
                 {f.text}
                 {f.confidence === "extracted" && <span className="guess-tag">guess?</span>}
               </p>
@@ -843,8 +888,10 @@ function Memory({
             </div>
           </li>
         ))}
-        {!facts.length && <p className="small muted">Nothing yet. Everything {hootName} learns shows up here.</p>}
       </ul>
+      </section>
+      ))}
+      {!facts.length && <p className="small muted">Nothing yet. Everything {hootName} learns shows up here.</p>}
     </div>
   );
 }

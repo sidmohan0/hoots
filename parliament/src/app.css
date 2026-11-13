@@ -333,3 +333,24 @@ button { font-family: var(--font-family-body); cursor: pointer; }
 .run-dot.later { border: 2px solid var(--c-line-strong); }
 .run-time { font-family: var(--font-family-mono); font-variant-numeric: tabular-nums; }
 .kept-counter { font-family: var(--font-family-mono); font-size: 11px; color: var(--c-text-muted); }
+
+/* provenance jump highlight + persistent memory column on wide screens */
+.item.hl .bubble { box-shadow: 0 0 0 2px var(--c-accent); }
+.fact-text[title] { text-decoration: underline dotted var(--c-line-strong); text-underline-offset: 3px; }
+
+/* ≥1280px: memory lives as a column, not a drawer (board 04B) */
+@media (min-width: 1280px) {
+  .shell { grid-template-columns: var(--layout-rail) 1fr var(--layout-drawer); }
+  .drawer-memory { position: static; grid-column: 3; border-left: 1px solid var(--c-line); box-shadow: none; }
+  .machine { left: var(--layout-rail); }
+}
+/* collapsed memory drawer becomes the persistent column: body always visible */
+@media (min-width: 1280px) {
+  .drawer-memory.drawer-collapsed { display: flex; }
+  .drawer-memory.drawer-collapsed .drawer-head { display: none; }
+}
+@media (max-width: 1279px) {
+  .drawer-memory.drawer-collapsed { display: none; }
+}
+
+@media (min-width: 1280px) { .machine .mem-toggle { display: none; } }
