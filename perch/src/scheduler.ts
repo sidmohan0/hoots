@@ -5,12 +5,94 @@ import { db, now, uuid } from "./db.js";
 import { startTurn } from "./turns.js";
 import { bus } from "./stream.js";
 
+// --- timezone math ---------------------------------------------------------
+// rrule's tzid support generates candidates as UTC-naive dates whose fields are
+// the *wall clock* in the zone, but compares them against real-epoch after()
+// boundaries — which misfires across offsets. So we do the wall<->epoch
+// conversion ourselves with Intl and keep the automation's timezone field
+// authoritative.
+
+const dtfCache = new Map<string, Intl.DateTimeFormat>();
+function dtfFor(tz: string): Intl.DateTimeFormat {
+  let dtf = dtfCache.get(tz);
+  if (!dtf) {
+    dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    });
+    dtfCache.set(tz, dtf);
+  }
+  return dtf;
+}
+
+function wallParts(tz: string, epochMs: number) {
+  const parts = dtfFor(tz).formatToParts(new Date(epochMs));
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  return { y: get("year"), mo: get("month"), d: get("day"), h: get("hour"), mi: get("minute"), s: get("second") };
+}
+
+/** Offset (ms) of `tz` from UTC at the given instant. */
+function tzOffsetMs(tz: string, epochMs: number): number {
+  const { y, mo, d, h, mi, s } = wallParts(tz, epochMs);
+  return Date.UTC(y, mo - 1, d, h, mi, s) - epochMs;
+}
+
+/** Real epoch ms of a wall-clock moment (UTC-naive Date) in `tz`. */
+function wallToEpoch(tz: string, wall: Date): number {
+  const u = Date.UTC(
+    wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate(),
+    wall.getUTCHours(), wall.getUTCMinutes(), wall.getUTCSeconds()
+  );
+  // two passes converge across DST transitions
+  let ts = u - tzOffsetMs(tz, u);
+  ts = u - tzOffsetMs(tz, ts);
+  return ts;
+}
+
+/** The instant `epochMs` rendered in `tz`, as a UTC-naive wall-clock Date. */
+function epochToWallNaive(tz: string, epochMs: number): Date {
+  const { y, mo, d, h, mi, s } = wallParts(tz, epochMs);
+  return new Date(Date.UTC(y, mo - 1, d, h, mi, s));
+}
+
+/** DTSTART value (UTC-naive wall clock) from an RFC 5545 text, if present. */
+function parseDtstart(text: string): Date | null {
+  const line = text.split(/\r?\n/).find((l) => /^DTSTART/i.test(l));
+  if (!line) return null;
+  const m = /^DTSTART(?:;[^:]*)?:(\d{8}(?:T\d{6})?Z?)$/i.exec(line.trim());
+  if (!m) return null;
+  const v = m[1].toUpperCase();
+  const y = +v.slice(0, 4), mo = +v.slice(4, 6), d = +v.slice(6, 8);
+  const h = v.length >= 15 ? +v.slice(9, 11) : 0;
+  const mi = v.length >= 15 ? +v.slice(11, 13) : 0;
+  const s = v.length >= 15 ? +v.slice(13, 15) : 0;
+  return new Date(Date.UTC(y, mo - 1, d, h, mi, s));
+}
+
 export function computeNextFire(rrule: string, timezone: string, afterMs = Date.now()): number | null {
   try {
-    // RFC 5545 line(s) e.g. "DTSTART;TZID=America/Los_Angeles:20261104T060000\nRRULE:..."
-    const rule = RRule.fromString(rrule.includes("RRULE:") ? rrule : `RRULE:${rrule}`);
-    const next = rule.after(new Date(afterMs), true);
-    return next ? next.getTime() : null;
+    // RFC 5545 text, e.g. "DTSTART;TZID=America/Los_Angeles:20261104T060000\nRRULE:..."
+    const text = rrule.includes("RRULE:") ? rrule : `RRULE:${rrule}`;
+    // rrule parses the options (freq/byhour/...) fine; we only borrow them.
+    const parsed = RRule.fromString(text);
+    const opts: any = { ...parsed.origOptions };
+    // UNTIL given as UTC (trailing Z) must be re-expressed as wall time in tz.
+    if (opts.until instanceof Date && /UNTIL[^;\n]*Z/i.test(text)) {
+      opts.until = epochToWallNaive(timezone, opts.until.getTime());
+    }
+    // DTSTART (or, absent, `afterMs`) is a wall-clock anchor in `timezone`;
+    // the timezone field wins over any TZID in the string.
+    const dtstart = parseDtstart(text) ?? epochToWallNaive(timezone, afterMs);
+    const rule = new RRule({ ...opts, dtstart, tzid: timezone });
+    // Compare candidates against the after-date rendered in the same zone.
+    const nextWall = rule.after(epochToWallNaive(timezone, afterMs), false);
+    return nextWall ? wallToEpoch(timezone, nextWall) : null;
   } catch {
     return null;
   }

@@ -74,7 +74,42 @@ function buildMessages(hoot: any, thread: any, userText: string | null) {
 
 // --- turn execution ---------------------------------------------------------
 
-const turnLocks = new Set<string>();
+// DB-level claim: turns are serial per thread, and the claim lives in the turns
+// table itself (status = 'in_progress') so it survives restarts and is shared
+// by every caller (API, herald, scheduler). better-sqlite3 transactions are
+// synchronous, so check-and-insert is atomic; BEGIN IMMEDIATE takes the write
+// lock up front to avoid deferred-transaction upgrade races.
+const claimTurn = db.transaction((threadId: string, turnId: string, trigger: string, startedAt: number) => {
+  const busy = db
+    .prepare(`SELECT id FROM turns WHERE thread_id = ? AND status = 'in_progress' LIMIT 1`)
+    .get(threadId);
+  if (busy) throw new Error("thread is busy with another turn");
+  db.prepare(
+    `INSERT INTO turns (id, thread_id, status, trigger, started_at) VALUES (?, ?, 'in_progress', ?, ?)`
+  ).run(turnId, threadId, trigger, startedAt);
+});
+
+/** Close out a turn (the DB analogue of releasing the old in-memory lock). */
+export function releaseTurn(
+  threadId: string,
+  turnId: string,
+  status: "completed" | "interrupted",
+  error: string | null = null
+) {
+  db.prepare(
+    `UPDATE turns SET status = ?, error = ?, completed_at = ? WHERE id = ? AND thread_id = ? AND status = 'in_progress'`
+  ).run(status, error, now(), turnId, threadId);
+}
+
+/** On boot: any turn left in_progress by a crash/restart becomes interrupted. */
+export function reconcileTurns(): number {
+  const stuck = db.prepare(`SELECT id, thread_id FROM turns WHERE status = 'in_progress'`).all() as any[];
+  for (const t of stuck) {
+    releaseTurn(t.thread_id, t.id, "interrupted", "perch restarted mid-turn");
+    bus.publish({ event: "turn.status", data: { turn_id: t.id, status: "interrupted", error: "perch restarted mid-turn" } });
+  }
+  return stuck.length;
+}
 
 export async function startTurn(opts: {
   threadId: string;
@@ -83,15 +118,12 @@ export async function startTurn(opts: {
 }): Promise<string> {
   const thread = db.prepare("SELECT * FROM threads WHERE id = ?").get(opts.threadId) as any;
   if (!thread) throw new Error(`thread ${opts.threadId} not found`);
-  if (turnLocks.has(thread.id)) throw new Error("thread is busy with another turn");
 
   const hoot = db.prepare("SELECT * FROM hoots WHERE id = ?").get(thread.hoot_id) as any;
   if (!hoot || hoot.status !== "active") throw new Error("hoot is not active");
 
   const turnId = uuid();
-  db.prepare(
-    `INSERT INTO turns (id, thread_id, status, trigger, started_at) VALUES (?, ?, 'in_progress', ?, ?)`
-  ).run(turnId, thread.id, opts.trigger, now());
+  claimTurn.immediate(thread.id, turnId, opts.trigger, now());
 
   if (opts.message) {
     db.prepare(
@@ -104,52 +136,45 @@ export async function startTurn(opts: {
 
   // execute async; API returns turn id immediately
   executeTurn(turnId, hoot, thread).catch((err) => {
-    db.prepare(`UPDATE turns SET status='interrupted', error=?, completed_at=? WHERE id=?`).run(
-      String(err?.message ?? err), now(), turnId
-    );
-    bus.publish({ event: "turn.status", data: { turn_id: turnId, status: "interrupted", error: String(err?.message ?? err) } });
+    const msg = String(err?.message ?? err);
+    releaseTurn(thread.id, turnId, "interrupted", msg);
+    bus.publish({ event: "turn.status", data: { turn_id: turnId, status: "interrupted", error: msg } });
   });
 
   return turnId;
 }
 
 async function executeTurn(turnId: string, hoot: any, thread: any) {
-  const lockKey = thread.id;
-  turnLocks.add(lockKey);
-  try {
-    let seq = (db.prepare(`SELECT COALESCE(MAX(seq),0) AS m FROM items WHERE turn_id = ?`).get(turnId) as any).m;
+  let seq = (db.prepare(`SELECT COALESCE(MAX(seq),0) AS m FROM items WHERE turn_id = ?`).get(turnId) as any).m;
 
-    const model: ModelConfig = {
-      baseUrl: hoot.model_base_url,
-      apiKey: process.env.OPENAI_API_KEY ?? "",
-      model: hoot.model_name,
-      params: hoot.model_params ? JSON.parse(hoot.model_params) : null,
-    };
-    const ctx: TurnContext = { hootId: hoot.id, threadId: thread.id, turnId };
-    const lastUser = db
-      .prepare(`SELECT content FROM items WHERE turn_id = ? AND role = 'user' ORDER BY seq DESC LIMIT 1`)
-      .get(turnId) as any;
-    const messages = buildMessages(hoot, thread, lastUser ? JSON.parse(lastUser.content).text : null);
+  const model: ModelConfig = {
+    baseUrl: hoot.model_base_url,
+    apiKey: process.env.OPENAI_API_KEY ?? "",
+    model: hoot.model_name,
+    params: hoot.model_params ? JSON.parse(hoot.model_params) : null,
+  };
+  const ctx: TurnContext = { hootId: hoot.id, threadId: thread.id, turnId };
+  const lastUser = db
+    .prepare(`SELECT content FROM items WHERE turn_id = ? AND role = 'user' ORDER BY seq DESC LIMIT 1`)
+    .get(turnId) as any;
+  const messages = buildMessages(hoot, thread, lastUser ? JSON.parse(lastUser.content).text : null);
 
-    await runTurn(model, messages, builtInTools(), ctx, {
-      onItem: (item) => {
-        seq += 1;
-        const id = uuid();
-        db.prepare(
-          `INSERT INTO items (id, turn_id, thread_id, seq, kind, role, content, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(id, turnId, thread.id, seq, item.kind, item.role ?? null, JSON.stringify(item.content), now());
-        bus.publish({ event: "item.append", data: { item: { id, turn_id: turnId, thread_id: thread.id, seq, ...item } } });
-      },
-    });
+  await runTurn(model, messages, builtInTools(), ctx, {
+    onItem: (item) => {
+      seq += 1;
+      const id = uuid();
+      db.prepare(
+        `INSERT INTO items (id, turn_id, thread_id, seq, kind, role, content, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(id, turnId, thread.id, seq, item.kind, item.role ?? null, JSON.stringify(item.content), now());
+      bus.publish({ event: "item.append", data: { item: { id, turn_id: turnId, thread_id: thread.id, seq, ...item } } });
+    },
+  });
 
-    db.prepare(`UPDATE turns SET status='completed', completed_at=? WHERE id=?`).run(now(), turnId);
-    db.prepare(`UPDATE threads SET updated_at=? WHERE id=?`).run(now(), thread.id);
-    bus.publish({ event: "turn.status", data: { turn_id: turnId, status: "completed" } });
+  releaseTurn(thread.id, turnId, "completed");
+  db.prepare(`UPDATE threads SET updated_at=? WHERE id=?`).run(now(), thread.id);
+  bus.publish({ event: "turn.status", data: { turn_id: turnId, status: "completed" } });
 
-    // pellet upkeep: regenerate on growth threshold
-    if (boughItemCount(hoot.id) % PELLET_EVERY_N_ITEMS === 0) regeneratePellet(hoot.id);
-  } finally {
-    turnLocks.delete(lockKey);
-  }
+  // pellet upkeep: regenerate on growth threshold
+  if (boughItemCount(hoot.id) % PELLET_EVERY_N_ITEMS === 0) regeneratePellet(hoot.id);
 }
