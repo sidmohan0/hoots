@@ -1,4 +1,6 @@
 import Fastify from "fastify";
+import { readFileSync, existsSync, statSync } from "node:fs";
+import path from "node:path";
 import { config } from "./config.js";
 import { db, now, uuid } from "./db.js";
 import { startTurn } from "./turns.js";
@@ -15,6 +17,7 @@ export function buildServer() {
 
   app.addHook("onRequest", async (req, reply) => {
     if (req.url === "/v1/health") return;
+    if (req.url === "/" || req.url.startsWith("/assets/")) return; // UI is same-origin local
     const auth = req.headers.authorization;
     if (auth !== `Bearer ${config.authToken}`) {
       return reply.code(401).send({ error: "unauthorized" });
@@ -116,6 +119,25 @@ export function buildServer() {
     return { ok: true };
   });
   app.get("/v1/channels/telegram/:chatId", async (req: Post) => channelForChat(req.params.chatId) ?? null);
+
+  // --- Parliament (built UI), served same-origin ---
+  const uiDir = path.join(import.meta.dirname ?? ".", "..", "..", "parliament", "dist");
+  app.get("/", async (req, reply) => {
+    const file = path.join(uiDir, "index.html");
+    if (existsSync(file)) {
+      reply.type("text/html").send(readFileSync(file));
+    } else {
+      reply.code(503).send("Parliament not built — run `npm run build -w parliament`");
+    }
+  });
+  app.get("/assets/*", async (req, reply) => {
+    const rel = (req.params as any)["*"];
+    const file = path.join(uiDir, "assets", rel);
+    if (!existsSync(file) || !statSync(file).isFile()) return reply.code(404).send();
+    const ext = path.extname(file);
+    const types: Record<string, string> = { ".js": "text/javascript", ".css": "text/css", ".ttf": "font/ttf", ".svg": "image/svg+xml", ".png": "image/png", ".html": "text/html" };
+    reply.type(types[ext] ?? "application/octet-stream").send(readFileSync(file));
+  });
 
   // --- SSE stream ---
   app.get("/v1/stream", async (req: any, reply: any) => {
