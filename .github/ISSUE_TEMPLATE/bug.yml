@@ -1,0 +1,62 @@
+name: Bug report
+description: Something broke, hangs, or fired at the wrong time.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Hoots is a single-user local daemon, so the log
+        tail and version below are usually enough to reproduce.
+
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: Actual behaviour, as concretely as you can. Include the hoot, the surface (web/Telegram), and the time it happened.
+      placeholder: At 06:00 the 6am promise fired twice and the second turn errored.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Daemon version
+      description: Output of `curl -s -H "Authorization: Bearer $PERCH_AUTH_TOKEN" http://127.0.0.1:7420/v1/health`, or the commit you built from.
+      placeholder: '{"ok":true,"version":"0.2.0"}'
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and Node version
+      placeholder: macOS 15.4, Node 22.11.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (tail)
+      description: Last ~50 lines. Redact your token, model key, and chat ids.
+      render: shell
+    validations:
+      required: false
+
+  - type: dropdown
+    id: data
+    attributes:
+      label: Does it reproduce on a fresh PERCH_DATA_DIR?
+      options:
+        - Not tried
+        - Yes
+        - No
+    validations:
+      required: true

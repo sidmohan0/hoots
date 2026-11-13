@@ -1,0 +1,72 @@
+name: Feature request
+description: Propose a behaviour or a surface change.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Hoots is opinionated on purpose. Read `docs/DECISIONS.md` first — most
+        of the obvious requests are already settled, and the best proposals name
+        the principle they serve rather than adding a feature.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What is hard or missing today, in your actual use.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+    validations:
+      required: true
+
+  - type: dropdown
+    id: principle
+    attributes:
+      label: Which principle does it serve?
+      description: Pick the closest entry in `docs/DECISIONS.md`. If none fits, say why in the box below.
+      options:
+        - '#1 Local-first, honest about what leaves'
+        - '#2 Vocabulary budget (hoot, bough, pellet)'
+        - '#3 One view, two drawers'
+        - '#4 Promises have one home'
+        - '#5 Outbound ledger is real'
+        - '#6 Composer never blocks'
+        - '#7 Presence grammar'
+        - '#8 One accent, one meaning'
+        - '#9 Day digests are lazy'
+        - '#10 "Late" is defined'
+        - '#11 Empty pellet slots are scaffolding'
+        - '#12 Never seed invented memory'
+        - '#13 Multi-hoot memory scope'
+        - None — new principle
+    validations:
+      required: true
+
+  - type: textarea
+    id: principle-detail
+    attributes:
+      label: Why that principle
+      description: One or two sentences. For a new principle, state it as a rule.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and what you would cut
+      description: Anything you considered, and whether this could ride an existing decision instead.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: vocabulary
+    attributes:
+      label: Vocabulary check
+      options:
+        - label: It introduces no new coined words (or says why it must)
+          required: true
