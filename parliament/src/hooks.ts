@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import type { StreamEvt } from "./api";
 
+// Connection health, per tokens motion.timing.reconnectShow / goneQuiet.
+export type StreamHealth = { status: "live" | "reconnecting" | "quiet"; since: number | null };
+
 // Subscribe to the perch's SSE stream. EventSource reconnects automatically
 // and resends Last-Event-ID; the perch replays the gap (DECISIONS: SSE ids).
-export function useStream(onEvent: (ev: StreamEvt) => void): void {
+// The returned health drives the footer + gone-quiet presence only; nothing
+// here may toast (a flapping stream would spam).
+export function useStream(onEvent: (ev: StreamEvt) => void): StreamHealth {
   const handler = useRef(onEvent);
   handler.current = onEvent;
+  const [down, setDown] = useState<number | null>(null);
+  const [status, setStatus] = useState<StreamHealth["status"]>("live");
+
   useEffect(() => {
     const es = new EventSource("/v1/stream");
     const listener = (e: MessageEvent) => {
@@ -18,8 +26,27 @@ export function useStream(onEvent: (ev: StreamEvt) => void): void {
     for (const type of ["turn.status", "item.append", "hoot.updated", "automation.fired", "fact.changed", "promise.changed"]) {
       es.addEventListener(type, listener as EventListener);
     }
+    es.onopen = () => setDown(null);
+    // Any error (CONNECTING retry or CLOSED) counts as down; recovery is onopen.
+    es.onerror = () => setDown((d) => d ?? Date.now());
     return () => es.close();
   }, []);
+
+  useEffect(() => {
+    if (down == null) {
+      setStatus("live");
+      return;
+    }
+    const check = () => {
+      const age = Date.now() - down;
+      setStatus(age >= 30_000 ? "quiet" : age >= 3_000 ? "reconnecting" : "live");
+    };
+    check();
+    const t = setInterval(check, 1000);
+    return () => clearInterval(t);
+  }, [down]);
+
+  return { status, since: down };
 }
 
 /** Ticking elapsed-seconds clock while `active` (board 07: thinking · 0:41). */
