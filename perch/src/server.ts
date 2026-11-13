@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
-import { db, now, uuid } from "./db.js";
+import { db, now, uuid, recordAutomationRun, localDate, localDayBounds } from "./db.js";
 import { startTurn } from "./turns.js";
 import { getPellet, regeneratePellet } from "./pellet.js";
 import { ensureDigest, getDigest } from "./digests.js";
@@ -102,6 +102,12 @@ export function buildServer() {
     if (!a) return reply.code(404).send({ error: "not found" });
     const { enabled, title, prompt } = req.body ?? {};
     const newEnabled = enabled === undefined ? a.enabled : (enabled ? 1 : 0);
+    // Disabling drops the pending promise: log it so the drawer tells the truth.
+    if (a.enabled && !newEnabled && a.next_fire_at != null) {
+      recordAutomationRun({
+        automationId: a.id, hootId: a.hoot_id, scheduledAt: a.next_fire_at, firedAt: null, outcome: "missed",
+      });
+    }
     db.prepare(`UPDATE automations SET enabled=?, title=?, prompt=? WHERE id=?`).run(
       newEnabled, title ?? a.title, prompt ?? a.prompt, a.id);
     if (newEnabled) db.prepare(`UPDATE automations SET next_fire_at=? WHERE id=?`).run(computeNextFire(a.rrule, a.timezone), a.id);
@@ -112,6 +118,21 @@ export function buildServer() {
     if (!a) return reply.code(404).send({ error: "not found" });
     db.prepare("DELETE FROM automations WHERE id = ?").run(req.params.id);
     return { ok: true };
+  });
+
+  // Promise history for one local day (drawer + today-strip).
+  app.get("/v1/hoots/:id/promise-runs", async (req: Post, reply: Reply) => {
+    const date: string = (req.query as any).date ?? localDate();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return reply.code(400).send({ error: "date must be YYYY-MM-DD" });
+    const { start, end } = localDayBounds(date);
+    return db
+      .prepare(
+        `SELECT r.id, r.automation_id, r.scheduled_at, r.fired_at, r.outcome, a.title
+         FROM automation_runs r JOIN automations a ON a.id = r.automation_id
+         WHERE r.hoot_id = ? AND r.scheduled_at >= ? AND r.scheduled_at < ?
+         ORDER BY r.scheduled_at`
+      )
+      .all(req.params.id, start, end);
   });
 
   // --- presence (board 04B: one line, third person) ---

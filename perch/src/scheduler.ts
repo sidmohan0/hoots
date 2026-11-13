@@ -1,7 +1,7 @@
 import rrulePkg from "rrule";
 // rrule ships CJS without an exports map; destructure via default interop.
 const { RRule } = rrulePkg as any;
-import { db, now, uuid } from "./db.js";
+import { db, now, uuid, LATE_GRACE_MS, recordAutomationRun } from "./db.js";
 import { startTurn } from "./turns.js";
 import { bus } from "./stream.js";
 
@@ -123,15 +123,32 @@ export async function tickScheduler(deliverFn?: (hootId: string, text: string) =
     const thread = db
       .prepare(`SELECT id FROM threads WHERE hoot_id = ? AND kind = ?`)
       .get(a.hoot_id, a.thread_kind) as any;
-    if (!thread) continue;
+    const scheduledAt: number = a.next_fire_at;
+    const firedAt = now();
+    if (!thread) {
+      recordAutomationRun({
+        automationId: a.id, hootId: a.hoot_id, scheduledAt, firedAt, outcome: "missed",
+      });
+      continue;
+    }
     try {
       const turnId = await startTurn({ threadId: thread.id, trigger: "automation", message: a.prompt });
+      // The run log is written only once the fire actually happened (#10).
+      recordAutomationRun({
+        automationId: a.id,
+        hootId: a.hoot_id,
+        scheduledAt,
+        firedAt,
+        outcome: firedAt - scheduledAt <= LATE_GRACE_MS ? "sent" : "late",
+      });
       bus.publish({ event: "automation.fired", data: { automation_id: a.id, turn_id: turnId } });
       if (a.deliver && deliverFn) {
         // v1: deliver the automation prompt acknowledgment flow — the turn's
         // outbound message is delivered by the herald watching for hoot messages.
         void deliverFn;
       }
+    } catch {
+      recordAutomationRun({ automationId: a.id, hootId: a.hoot_id, scheduledAt, firedAt: null, outcome: "skipped" });
     } finally {
       db.prepare(`UPDATE automations SET last_fired_at = ?, next_fire_at = ? WHERE id = ?`).run(
         now(), computeNextFire(a.rrule, a.timezone, now() + 1000), a.id

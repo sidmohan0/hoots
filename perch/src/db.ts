@@ -215,3 +215,45 @@ db.exec(`CREATE TABLE IF NOT EXISTS read_state (
   last_read_at INTEGER NOT NULL,
   PRIMARY KEY (hoot_id, surface)
 )`);
+
+// Every scheduler fire (and every promise that never got one) is logged here so
+// the promises drawer can show kept/late/missed history (DECISIONS.md #10).
+db.exec(`CREATE TABLE IF NOT EXISTS automation_runs (
+  id TEXT PRIMARY KEY,
+  automation_id TEXT NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+  hoot_id TEXT NOT NULL REFERENCES hoots(id),
+  scheduled_at INTEGER NOT NULL,
+  fired_at INTEGER,
+  outcome TEXT NOT NULL CHECK (outcome IN ('sent','late','missed','skipped'))
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_runs_hoot_day ON automation_runs(hoot_id, scheduled_at)`);
+
+// Fired more than 15 minutes after schedule = late, never "sent" (#10).
+export const LATE_GRACE_MS = 15 * 60_000;
+
+export type RunOutcome = "sent" | "late" | "missed" | "skipped";
+
+export function recordAutomationRun(r: {
+  automationId: string;
+  hootId: string;
+  scheduledAt: number;
+  firedAt: number | null;
+  outcome: RunOutcome;
+}): void {
+  db.prepare(
+    `INSERT INTO automation_runs (id, automation_id, hoot_id, scheduled_at, fired_at, outcome)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(uuid(), r.automationId, r.hootId, r.scheduledAt, r.firedAt, r.outcome);
+}
+
+/** `YYYY-MM-DD` for an instant in the perch host's local zone. */
+export function localDate(epochMs: number = Date.now()): string {
+  const d = new Date(epochMs);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Epoch bounds of a local calendar day, [start, end). */
+export function localDayBounds(date: string): { start: number; end: number } {
+  const [y, m, d] = date.split("-").map(Number);
+  return { start: new Date(y, m - 1, d).getTime(), end: new Date(y, m - 1, d + 1).getTime() };
+}
