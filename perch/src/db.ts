@@ -83,7 +83,79 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+
+-- FTS5 recall index over message/note items. Standalone (not external-content)
+-- because the indexed text is extracted from the items.content JSON ($.text /
+-- $.fact), which external-content tables can't express column-wise. Kept in
+-- sync with triggers below; no lazy rebuild needed.
+CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
+  item_id UNINDEXED,
+  text,
+  tokenize = 'unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS items_fts_ai AFTER INSERT ON items
+WHEN new.kind IN ('message','note') BEGIN
+  INSERT INTO items_fts (item_id, text) VALUES (
+    new.id,
+    CASE WHEN json_valid(new.content)
+      THEN COALESCE(json_extract(new.content, '$.text'), '') || ' ' ||
+           COALESCE(json_extract(new.content, '$.fact'), '')
+      ELSE '' END
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS items_fts_ad AFTER DELETE ON items BEGIN
+  DELETE FROM items_fts WHERE item_id = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS items_fts_au AFTER UPDATE OF content, kind ON items
+WHEN new.kind IN ('message','note') OR old.kind IN ('message','note') BEGIN
+  DELETE FROM items_fts WHERE item_id = new.id;
+  INSERT INTO items_fts (item_id, text)
+  SELECT new.id,
+         CASE WHEN json_valid(new.content)
+           THEN COALESCE(json_extract(new.content, '$.text'), '') || ' ' ||
+                COALESCE(json_extract(new.content, '$.fact'), '')
+           ELSE '' END
+  WHERE new.kind IN ('message','note');
+END;
 `);
 
 export const now = () => Date.now();
 export const uuid = () => crypto.randomUUID();
+
+export function getMeta(key: string): string | null {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as any;
+  return row ? row.value : null;
+}
+
+export function setMeta(key: string, value: string): void {
+  db.prepare(
+    `INSERT INTO meta (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run(key, value);
+}
+
+// --- migrations (run at import time; safe to re-run) ------------------------
+
+// Schema version marker. Bump when a new migration is added; each migration
+// gates its own work on its own meta flag so re-running is a no-op.
+if (getMeta("schema_version") === null) setMeta("schema_version", "2");
+
+// One-time FTS backfill for items that predate the index. Atomic with the
+// flag write, so a crash mid-backfill re-runs it cleanly on next boot.
+if (getMeta("fts_backfilled") === null) {
+  db.transaction(() => {
+    db.prepare("DELETE FROM items_fts").run();
+    db.prepare(
+      `INSERT INTO items_fts (item_id, text)
+       SELECT id,
+              COALESCE(json_extract(content, '$.text'), '') || ' ' ||
+              COALESCE(json_extract(content, '$.fact'), '')
+       FROM items
+       WHERE kind IN ('message','note') AND json_valid(content)`
+    ).run();
+    setMeta("fts_backfilled", String(now()));
+  })();
+}
