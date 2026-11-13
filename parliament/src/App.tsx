@@ -5,6 +5,7 @@ import { Glyph, type PresenceState } from "./Glyph";
 import { Markdown } from "./markdown";
 import { Toaster, toast } from "./toast";
 import { looksLikePromise, proposePromise, PromiseCard, type Proposal } from "./PromiseCard";
+import { DaySpine } from "./DaySpine";
 import { Command } from "./Command";
 import { EmptyBough, NewHoot } from "./Onboarding";
 import { Settings } from "./Settings";
@@ -359,6 +360,14 @@ export function App() {
       <main className="bough" ref={boughRef} onScroll={onBoughScroll}>
         <PresenceHeader name={hootName} state={state} presence={presence} thinking={thinking} runs={runs} />
         {loaded && !items.length && !thinking && <EmptyBough onConnectTelegram={() => setSettings(true)} />}
+        <DaySpine
+          todayKey={dayKey(Date.now())}
+          dayKeys={[...new Set(items.map((i) => dayKey(i.created_at)))]}
+          onJump={(k) => {
+            if (k === dayKey(Date.now())) boughRef.current?.scrollTo({ top: boughRef.current.scrollHeight, behavior: "smooth" });
+            else navigate({ day: k });
+          }}
+        />
         <Items
           items={items}
           thinking={thinking}

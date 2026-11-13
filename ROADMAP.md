@@ -1,3 +1,15 @@
+# Done (v0.3)
+
+- Turn queueing, live turn card, optimistic send, reply pill, away divider
+- Facts ledger with scope/category/provenance/guess + confirm/forget/correct
+- Promise card (NL → chips → assumptions → pellet conflicts → I promise)
+- Automation run log with sent/late/missed + one-note-per-day cap
+- presence truth, queue API, turn retry, digest invalidation + retry
+- Telegram: markdown→HTML, chunking, 429/5xx backoff, web-focus gate
+- Memory column, fact grouping, provenance jump, day spine, kept/missed counter
+- Open-source scaffolding: LICENSE, CoC, SECURITY, CONTRIBUTING, templates, CI, tests
+- a11y: drawer focus trap, aria-live log
+
 # Roadmap
 
 Sourced from the gap list between `docs/SPEC.md` and what the daemon actually
