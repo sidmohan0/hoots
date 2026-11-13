@@ -93,9 +93,10 @@ export function buildServer() {
     const a = db.prepare("SELECT * FROM automations WHERE id = ?").get(req.params.id) as any;
     if (!a) return reply.code(404).send({ error: "not found" });
     const { enabled, title, prompt } = req.body ?? {};
+    const newEnabled = enabled === undefined ? a.enabled : (enabled ? 1 : 0);
     db.prepare(`UPDATE automations SET enabled=?, title=?, prompt=? WHERE id=?`).run(
-      enabled ?? a.enabled, title ?? a.title, prompt ?? a.prompt, a.id);
-    if (enabled) db.prepare(`UPDATE automations SET next_fire_at=? WHERE id=?`).run(computeNextFire(a.rrule, a.timezone), a.id);
+      newEnabled, title ?? a.title, prompt ?? a.prompt, a.id);
+    if (newEnabled) db.prepare(`UPDATE automations SET next_fire_at=? WHERE id=?`).run(computeNextFire(a.rrule, a.timezone), a.id);
     return db.prepare("SELECT * FROM automations WHERE id = ?").get(a.id);
   });
 
