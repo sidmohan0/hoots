@@ -8,6 +8,7 @@ import { getPellet, regeneratePellet } from "./pellet.js";
 import { ensureDigest, getDigest } from "./digests.js";
 import { outboundToday } from "./outbound.js";
 import { createAutomation, computeNextFire } from "./scheduler.js";
+import { proposePromise } from "./promise.js";
 import { bus } from "./stream.js";
 import { bindChannel, channelForChat } from "./herald-telegram.js";
 
@@ -167,6 +168,19 @@ export function buildServer() {
     if (!a) return reply.code(404).send({ error: "not found" });
     db.prepare("DELETE FROM automations WHERE id = ?").run(req.params.id);
     return { ok: true };
+  });
+
+  // Draft a promise from a sentence (model call; never writes the db).
+  app.post("/v1/hoots/:id/propose-promise", async (req: Post, reply: Reply) => {
+    const hoot = db.prepare("SELECT id FROM hoots WHERE id = ?").get(req.params.id);
+    if (!hoot) return reply.code(404).send({ error: "not found" });
+    const text: string = req.body?.text;
+    if (typeof text !== "string" || !text.trim()) return reply.code(400).send({ error: "text required" });
+    try {
+      return await proposePromise(req.params.id, text);
+    } catch (err: any) {
+      return reply.code(err?.status ?? 502).send({ error: String(err?.message ?? err) });
+    }
   });
 
   // Promise history for one local day (drawer + today-strip).
