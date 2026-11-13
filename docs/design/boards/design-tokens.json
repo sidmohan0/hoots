@@ -1,0 +1,301 @@
+{
+  "$description": "Hoots · Parliament v1 design tokens. Format follows the W3C Design Tokens draft ($value / $type). Semantic colours are themed: read color.light.* or color.dark.*; every other group is theme-independent. All text/background pairs listed under color.*.text meet WCAG AA (4.5:1) on their theme's bg and surface.",
+  "$version": "0.1.0",
+
+  "color": {
+    "light": {
+      "bg":        { "$type": "color", "$value": "#F5F5F2", "$description": "App ground" },
+      "bgSunken":  { "$type": "color", "$value": "#EDEDE8", "$description": "Rail, digests, read-only wells" },
+      "surface":   { "$type": "color", "$value": "#FFFFFF", "$description": "Cards, drawer, composer" },
+      "line":      { "$type": "color", "$value": "#E2E2DC" },
+      "lineStrong":{ "$type": "color", "$value": "#A9ACB3", "$description": "Dashed thinking card, empty slots" },
+      "text":      { "$type": "color", "$value": "#17191E" },
+      "textSoft":  { "$type": "color", "$value": "#3F434B", "$description": "Body copy in secondary blocks" },
+      "textMuted": { "$type": "color", "$value": "#5B606B", "$description": "Timestamps, labels (5.9:1 on bg)" },
+      "bubbleHoot":{ "$type": "color", "$value": "#F1F1EC" },
+      "bubbleYou": { "$type": "color", "$value": "#E6E7EA" },
+      "accent":    { "$type": "color", "$value": "#F2B544", "$description": "Amber: fills only (eyes, primary button, kept dots). Never text on light." },
+      "accentText":{ "$type": "color", "$value": "#8A5200", "$description": "Amber as text on light (6.1:1 on accentWash)" },
+      "accentWash":{ "$type": "color", "$value": "#FBF4E4", "$description": "Noted chips, conflict banner, next-promise row" },
+      "accentLine":{ "$type": "color", "$value": "#EBD6A6" },
+      "quiet":     { "$type": "color", "$value": "#B4441E", "$description": "Gone-quiet only. The one alarm colour." },
+      "quietWash": { "$type": "color", "$value": "#FBEAE3" },
+      "chrome":    { "$type": "color", "$value": "#17191E", "$description": "Machine footer ground" },
+      "chromeText":{ "$type": "color", "$value": "#C5C8CF" },
+      "focus":     { "$type": "color", "$value": "#17191E" }
+    },
+    "dark": {
+      "bg":        { "$type": "color", "$value": "#121418" },
+      "bgSunken":  { "$type": "color", "$value": "#0D0F12" },
+      "surface":   { "$type": "color", "$value": "#1B1E24" },
+      "surfaceRaised": { "$type": "color", "$value": "#262A32", "$description": "Hover/selected rows, palette highlight" },
+      "line":      { "$type": "color", "$value": "#2A2E36" },
+      "lineStrong":{ "$type": "color", "$value": "#3A3F49" },
+      "text":      { "$type": "color", "$value": "#ECEDEF" },
+      "textSoft":  { "$type": "color", "$value": "#C5C8CF" },
+      "textMuted": { "$type": "color", "$value": "#9AA0AB" },
+      "bubbleHoot":{ "$type": "color", "$value": "#1B1E24" },
+      "bubbleYou": { "$type": "color", "$value": "#2B3039" },
+      "accent":    { "$type": "color", "$value": "#F2B544", "$description": "Safe as text and fill on dark" },
+      "accentText":{ "$type": "color", "$value": "#F2B544" },
+      "accentWash":{ "$type": "color", "$value": "#2A2416" },
+      "accentLine":{ "$type": "color", "$value": "#5C4A22" },
+      "quiet":     { "$type": "color", "$value": "#F28B6B" },
+      "quietWash": { "$type": "color", "$value": "#2E1C17" },
+      "chrome":    { "$type": "color", "$value": "#0D0F12" },
+      "chromeText":{ "$type": "color", "$value": "#C5C8CF" },
+      "focus":     { "$type": "color", "$value": "#F2B544" }
+    },
+    "avatar": {
+      "$description": "v1 hoot colours. Each pair passes 4.5:1 for the monogram. Avatar hues stay away from amber (reserved for state) and from quiet coral.",
+      "moss":  { "bg": { "$type": "color", "$value": "#3F6B4F" }, "fg": { "$type": "color", "$value": "#FFFFFF" } },
+      "slate": { "bg": { "$type": "color", "$value": "#3D5A80" }, "fg": { "$type": "color", "$value": "#FFFFFF" } },
+      "plum":  { "bg": { "$type": "color", "$value": "#6B4A7A" }, "fg": { "$type": "color", "$value": "#FFFFFF" } },
+      "ink":   { "bg": { "$type": "color", "$value": "#2B2F36" }, "fg": { "$type": "color", "$value": "#FFFFFF" } },
+      "sand":  { "bg": { "$type": "color", "$value": "#D9C9A3" }, "fg": { "$type": "color", "$value": "#17191E" } },
+      "sky":   { "bg": { "$type": "color", "$value": "#A9C6E0" }, "fg": { "$type": "color", "$value": "#17191E" } },
+      "sage":  { "bg": { "$type": "color", "$value": "#B9CDB4" }, "fg": { "$type": "color", "$value": "#17191E" } },
+      "rose":  { "bg": { "$type": "color", "$value": "#E4B9B4" }, "fg": { "$type": "color", "$value": "#17191E" } }
+    }
+  },
+
+  "font": {
+    "family": {
+      "display": { "$type": "fontFamily", "$value": ["Space Grotesk", "system-ui", "sans-serif"] },
+      "body":    { "$type": "fontFamily", "$value": ["Inter", "system-ui", "sans-serif"] },
+      "mono":    { "$type": "fontFamily", "$value": ["JetBrains Mono", "ui-monospace", "monospace"], "$description": "Times, clocks, labels, pellet raw view, keys" }
+    },
+    "weight": {
+      "regular":  { "$type": "fontWeight", "$value": 400 },
+      "medium":   { "$type": "fontWeight", "$value": 500 },
+      "semibold": { "$type": "fontWeight", "$value": 600 },
+      "bold":     { "$type": "fontWeight", "$value": 700 }
+    }
+  },
+
+  "type": {
+    "$description": "Scale ≈ 1.2 ratio from 15px body. letterSpacing in em.",
+    "display":  { "$type": "typography", "$value": { "fontFamily": "{font.family.display}", "fontSize": "52px", "fontWeight": 600, "lineHeight": 1.0,  "letterSpacing": "-0.02em" }, "$description": "Board / empty-state hero only" },
+    "hero":     { "$type": "typography", "$value": { "fontFamily": "{font.family.display}", "fontSize": "38px", "fontWeight": 600, "lineHeight": 1.1,  "letterSpacing": "-0.02em" }, "$description": "Perch presence line (first 3 days)" },
+    "h1":       { "$type": "typography", "$value": { "fontFamily": "{font.family.display}", "fontSize": "30px", "fontWeight": 600, "lineHeight": 1.15, "letterSpacing": "-0.01em" } },
+    "day":      { "$type": "typography", "$value": { "fontFamily": "{font.family.display}", "fontSize": "26px", "fontWeight": 600, "lineHeight": 1.2,  "letterSpacing": "-0.01em" }, "$description": "Day header in the bough" },
+    "h2":       { "$type": "typography", "$value": { "fontFamily": "{font.family.display}", "fontSize": "22px", "fontWeight": 600, "lineHeight": 1.25, "letterSpacing": "0" } },
+    "h3":       { "$type": "typography", "$value": { "fontFamily": "{font.family.display}", "fontSize": "18px", "fontWeight": 600, "lineHeight": 1.3,  "letterSpacing": "0" }, "$description": "Drawer titles, hoot name" },
+    "message":  { "$type": "typography", "$value": { "fontFamily": "{font.family.body}",    "fontSize": "15.5px", "fontWeight": 400, "lineHeight": 1.55, "letterSpacing": "0" }, "$description": "Bough items. Max measure 68ch." },
+    "body":     { "$type": "typography", "$value": { "fontFamily": "{font.family.body}",    "fontSize": "15px", "fontWeight": 400, "lineHeight": 1.5,  "letterSpacing": "0" } },
+    "small":    { "$type": "typography", "$value": { "fontFamily": "{font.family.body}",    "fontSize": "13.5px", "fontWeight": 400, "lineHeight": 1.45, "letterSpacing": "0" }, "$description": "Facts, drawer rows" },
+    "caption":  { "$type": "typography", "$value": { "fontFamily": "{font.family.body}",    "fontSize": "12px", "fontWeight": 400, "lineHeight": 1.4,  "letterSpacing": "0" }, "$description": "Provenance, helper text" },
+    "label":    { "$type": "typography", "$value": { "fontFamily": "{font.family.mono}",    "fontSize": "11px", "fontWeight": 500, "lineHeight": 1.3,  "letterSpacing": "0.06em", "textTransform": "uppercase" }, "$description": "Section labels: NOTED, TODAY, FACTS · 23" },
+    "time":     { "$type": "typography", "$value": { "fontFamily": "{font.family.mono}",    "fontSize": "12px", "fontWeight": 400, "lineHeight": 1.3,  "letterSpacing": "0", "fontVariantNumeric": "tabular-nums" }, "$description": "Timestamps, elapsed clock, time chips (chips use 14px)" },
+    "monogram": { "$type": "typography", "$value": { "fontFamily": "{font.family.display}", "fontSize": "0.42em", "fontWeight": 600, "lineHeight": 1, "letterSpacing": "-0.01em" }, "$description": "Relative to avatar size" }
+  },
+
+  "space": {
+    "$description": "4px base. Use these steps only.",
+    "0":  { "$type": "dimension", "$value": "0px" },
+    "0.5":{ "$type": "dimension", "$value": "2px" },
+    "1":  { "$type": "dimension", "$value": "4px" },
+    "2":  { "$type": "dimension", "$value": "8px" },
+    "3":  { "$type": "dimension", "$value": "12px" },
+    "4":  { "$type": "dimension", "$value": "16px" },
+    "5":  { "$type": "dimension", "$value": "20px" },
+    "6":  { "$type": "dimension", "$value": "24px" },
+    "8":  { "$type": "dimension", "$value": "32px" },
+    "10": { "$type": "dimension", "$value": "40px" },
+    "12": { "$type": "dimension", "$value": "48px" },
+    "16": { "$type": "dimension", "$value": "64px" }
+  },
+
+  "radius": {
+    "xs":   { "$type": "dimension", "$value": "4px",  "$description": "Tags (guess?), kbd, letter cards" },
+    "sm":   { "$type": "dimension", "$value": "6px",  "$description": "Chips, digest rows" },
+    "md":   { "$type": "dimension", "$value": "8px",  "$description": "Buttons, inputs inside cards, time chips" },
+    "lg":   { "$type": "dimension", "$value": "10px", "$description": "Cards, thinking card" },
+    "xl":   { "$type": "dimension", "$value": "12px", "$description": "Composer, promise card, panels" },
+    "bubble":{ "$type": "string", "$value": "16px 16px 16px 4px", "$description": "Hoot bubble; mirror for yours: 16px 16px 4px 16px" },
+    "pill": { "$type": "dimension", "$value": "999px", "$description": "Avatars, toggles, summary pills, glyph badge" }
+  },
+
+  "border": {
+    "hairline": { "$type": "border", "$value": { "width": "1px", "style": "solid", "color": "{color.*.line}" } },
+    "strong":   { "$type": "border", "$value": { "width": "1.5px", "style": "solid", "color": "{color.*.text}" }, "$description": "Composer, promise card awaiting confirmation" },
+    "pending":  { "$type": "border", "$value": { "width": "1px", "style": "dashed", "color": "{color.*.lineStrong}" }, "$description": "Anything not yet real: thinking card, empty pellet slot, unconfirmed chip" }
+  },
+
+  "shadow": {
+    "none":   { "$type": "shadow", "$value": "none" },
+    "letter": { "$type": "shadow", "$value": "0 1px 0 #D6D7D1, 0 8px 24px rgba(23,25,30,0.06)", "$description": "Light theme only; dark uses surface steps instead of shadow" },
+    "overlay":{ "$type": "shadow", "$value": "0 12px 40px rgba(0,0,0,0.28)", "$description": "⌘K palette" }
+  },
+
+  "focus": {
+    "ring": { "$type": "string", "$value": "0 0 0 2px {color.*.bg}, 0 0 0 4px {color.*.focus}", "$description": "Every interactive element; never removed" }
+  },
+
+  "layout": {
+    "rail":          { "$type": "dimension", "$value": "64px" },
+    "daySpine":      { "$type": "dimension", "$value": "248px" },
+    "drawer":        { "$type": "dimension", "$value": "380px", "$description": "min 360, max 440" },
+    "footer":        { "$type": "dimension", "$value": "32px" },
+    "measure":       { "$type": "dimension", "$value": "68ch", "$description": "Max line length for messages" },
+    "boughMax":      { "$type": "dimension", "$value": "760px" },
+    "touchMin":      { "$type": "dimension", "$value": "44px", "$description": "Buttons, composer, palette rows" },
+    "breakpointDrawerOverlay": { "$type": "dimension", "$value": "1100px", "$description": "Below this the drawer overlays instead of pushing" }
+  },
+
+  "avatar": {
+    "size": {
+      "xs": { "$type": "dimension", "$value": "24px", "$description": "Inline in items, palette. Glyph collapses to a dot." },
+      "sm": { "$type": "dimension", "$value": "40px", "$description": "Rail" },
+      "md": { "$type": "dimension", "$value": "72px", "$description": "Header" },
+      "lg": { "$type": "dimension", "$value": "120px", "$description": "Settings, new-hoot" }
+    },
+    "badge": {
+      "widthRatio":  { "$type": "number", "$value": 0.55, "$description": "Badge width ÷ avatar size (≥40px)" },
+      "aspect":      { "$type": "number", "$value": 0.6,  "$description": "height ÷ width" },
+      "offset":      { "$type": "dimension", "$value": "-4px", "$description": "From bottom-right" },
+      "ring":        { "$type": "dimension", "$value": "2px",  "$description": "Ring in the theme's surface colour, separates badge from disc" },
+      "dotSize":     { "$type": "dimension", "$value": "8px",  "$description": "At 24px: dot replaces eyes" }
+    },
+    "monogram": {
+      "maxChars": { "$type": "number", "$value": 2, "$description": "Default: first letter of name; second letter only if two words" }
+    },
+    "selectedRing": { "$type": "string", "$value": "0 0 0 2px {color.*.bg}, 0 0 0 5px {color.*.accent}", "$description": "Active hoot in rail" }
+  },
+
+  "motion": {
+    "easing": {
+      "standard": { "$type": "cubicBezier", "$value": [0.2, 0, 0, 1] },
+      "breathe":  { "$type": "cubicBezier", "$value": [0.45, 0, 0.55, 1] }
+    },
+    "duration": {
+      "fast":        { "$type": "duration", "$value": "120ms", "$description": "Hover, press" },
+      "base":        { "$type": "duration", "$value": "200ms", "$description": "Reply replaces thinking card; drawer" },
+      "slow":        { "$type": "duration", "$value": "320ms", "$description": "Noted chip arrival" },
+      "breathe":     { "$type": "duration", "$value": "2400ms", "$description": "Thinking glyph lid cycle; the only looping motion" },
+      "blinkEvery":  { "$type": "duration", "$value": "12000ms", "$description": "Awake blink, jittered ±4s; disabled under reduced motion" }
+    },
+    "timing": {
+      "thinkingGrace":  { "$type": "duration", "$value": "400ms",  "$description": "Delay before thinking card appears" },
+      "thinkingRelax":  { "$type": "duration", "$value": "20000ms","$description": "Copy switches to 'usually ~1 min · fine to leave'; Telegram gets its one-line ack" },
+      "reconnectShow":  { "$type": "duration", "$value": "3000ms", "$description": "Footer shows 'reconnecting…'" },
+      "goneQuiet":      { "$type": "duration", "$value": "30000ms","$description": "Stream down this long → gone quiet" },
+      "awayDividerFade":{ "$type": "duration", "$value": "1500ms", "$description": "After divider scrolls out of view" }
+    },
+    "reducedMotion": { "$type": "string", "$value": "No blink, no breathe; thinking shows lids half-closed and the clock only." }
+  },
+
+  "component": {
+    "presence": {
+      "$description": "One glyph, four states. Eyes drawn in a 40×22 box: two r9 circles at x=10 and x=30.",
+      "awake":    { "eyes": "open", "pupil": "{color.*.accent}", "lid": "none", "motion": "blink", "label": "awake", "chromeCopy": "awake · next check-in {time}" },
+      "thinking": { "eyes": "open", "pupil": "{color.*.accent}", "lid": "upper half filled {color.*.text}", "motion": "breathe", "label": "thinking", "chromeCopy": "thinking · {elapsed}" },
+      "sleeping": { "eyes": "closed arcs", "stroke": "{color.*.textMuted}", "motion": "none", "label": "sleeping", "chromeCopy": "sleeping until {nextPromise}" },
+      "quiet":    { "eyes": "dashed outline, no pupils", "stroke": "{color.*.quiet}", "dash": "3 3", "motion": "none", "label": "gone quiet", "chromeCopy": "gone quiet · {reason}", "note": "Alarms never animate." },
+      "dotAtXs":  { "awake": "none", "thinking": "{color.*.accent}, breathe", "sleeping": "none", "quiet": "{color.*.quiet}" }
+    },
+
+    "button": {
+      "primary": {
+        "default":  { "bg": "{color.*.accent}", "fg": "#17191E", "border": "none" },
+        "hover":    { "bg": "#E6A72F", "fg": "#17191E" },
+        "active":   { "bg": "#D99A22", "fg": "#17191E" },
+        "focus":    { "ring": "{focus.ring}" },
+        "disabled": { "bg": "{color.*.line}", "fg": "{color.*.textMuted}" },
+        "height": "44px", "paddingX": "{space.5}", "radius": "{radius.lg}", "type": "body · semibold",
+        "$description": "One per surface at most. Used for 'I promise'."
+      },
+      "secondary": {
+        "default":  { "bg": "{color.*.surface}", "fg": "{color.*.text}", "border": "1px solid {color.*.text}" },
+        "hover":    { "bg": "{color.*.bgSunken}" },
+        "active":   { "bg": "{color.*.line}" },
+        "focus":    { "ring": "{focus.ring}" },
+        "disabled": { "fg": "{color.*.textMuted}", "border": "1px solid {color.*.line}" },
+        "height": "36px", "paddingX": "{space.3}", "radius": "{radius.md}"
+      },
+      "ghost": {
+        "default":  { "bg": "transparent", "fg": "{color.*.text}", "border": "1px solid {color.*.line}" },
+        "hover":    { "bg": "{color.*.bgSunken}" },
+        "focus":    { "ring": "{focus.ring}" },
+        "disabled": { "fg": "{color.*.textMuted}" }
+      }
+    },
+
+    "input": {
+      "composer": {
+        "default":  { "bg": "{color.*.surface}", "border": "1px solid {color.*.text}", "radius": "{radius.xl}", "minHeight": "44px", "padding": "{space.3} {space.4}" },
+        "focus":    { "ring": "{focus.ring}" },
+        "duringTurn": { "label": "ADD WHILE IT THINKS — folded into this turn", "border": "1px solid {color.*.text}", "$description": "Never disabled while a turn is in flight" },
+        "offline":  { "label": "Saved — sends when Juniper's back", "border": "1px dashed {color.*.lineStrong}" }
+      }
+    },
+
+    "item": {
+      "pending":  { "opacity": 0.7, "meta": "sending…" },
+      "sent":     { "opacity": 1, "meta": "{time} · {surface}" },
+      "failed":   { "meta": "didn't send · retry", "metaColor": "{color.*.quiet}" },
+      "fromPromise": { "meta": "promise · {time}", "metaColor": "{color.*.accentText}" },
+      "surfaceMark": { "web": "none", "telegram": "paper-plane 14px + 'via Telegram', {color.*.textMuted}" }
+    },
+
+    "thinkingCard": {
+      "grace":    { "visible": false, "duration": "{motion.timing.thinkingGrace}" },
+      "thinking": { "border": "{border.pending}", "radius": "{radius.lg}", "bg": "{color.*.surface}", "copy": "thinking · {elapsed}" },
+      "relaxed":  { "copy": "thinking · {elapsed} — usually ~1 min · fine to leave" },
+      "done":     { "transition": "crossfade to item, {motion.duration.base}" },
+      "failed":   { "border": "1px solid {color.*.quiet}", "copy": "That didn't go through · try again" }
+    },
+
+    "timeChip": {
+      "default":  { "bg": "{color.*.text}", "fg": "{color.*.bg}", "radius": "{radius.md}", "type": "mono 14px" },
+      "assumed":  { "bg": "{color.*.text}", "fg": "{color.*.bg}", "suffix": "← \"3\" in {color.*.textMuted}", "$description": "Model interpreted the user's words" },
+      "conflict": { "bg": "{color.*.accentWash}", "fg": "{color.*.accentText}", "border": "1.5px dashed {color.*.accentText}", "icon": "⚠" },
+      "removed":  { "textDecoration": "line-through", "fg": "{color.*.textMuted}", "bg": "transparent" }
+    },
+
+    "promiseDot": {
+      "sent":    { "fill": "{color.*.text}", "size": "12px" },
+      "next":    { "fill": "none", "stroke": "2px {color.*.accentText}", "rowBg": "{color.*.accentWash}" },
+      "later":   { "fill": "none", "stroke": "2px {color.*.lineStrong}" },
+      "missed":  { "fill": "none", "stroke": "2px {color.*.text}", "mark": "diagonal slash" },
+      "paused":  { "fill": "none", "stroke": "2px dashed {color.*.lineStrong}" }
+    },
+
+    "fact": {
+      "default":   { "text": "{type.small}", "meta": "{type.caption} {color.*.textMuted}", "divider": "{border.hairline}" },
+      "new":       { "meta": "new · {when} · {surface}", "metaColor": "{color.*.accentText}" },
+      "guess":     { "tag": "guess?", "tagBorder": "1px dashed {color.*.accentText}", "tagRadius": "{radius.xs}", "actions": ["confirm", "forget"] },
+      "editing":   { "bg": "{color.*.accentWash}", "border": "1px solid {color.*.accentLine}" },
+      "forgotten": { "textDecoration": "line-through", "fg": "{color.*.textMuted}", "undoFor": "8000ms", "then": "removed from pellet and list" },
+      "hover":     { "bg": "{color.*.bgSunken}", "hint": "↵ jump to source · E correct · ⌫ forget" }
+    },
+
+    "notedChip": {
+      "default": { "borderLeft": "2px solid {color.*.accent}", "label": "NOTED", "actions": ["undo", "edit"], "enter": "{motion.duration.slow} fade + 4px rise" },
+      "undone":  { "label": "won't remember this", "fg": "{color.*.textMuted}" }
+    },
+
+    "emptySlot": {
+      "default": { "border": "1.5px dashed {color.*.lineStrong}", "radius": "{radius.md}", "fg": "{color.*.textMuted}" },
+      "filled":  { "border": "{border.hairline}", "fg": "{color.*.text}", "transition": "{motion.duration.slow}" }
+    },
+
+    "toggle": {
+      "on":       { "track": "{color.*.text}", "thumb": "{color.*.accent}" },
+      "off":      { "track": "{color.*.line}", "thumb": "{color.*.surface}" },
+      "focus":    { "ring": "{focus.ring}" },
+      "size":     { "width": "40px", "height": "22px", "thumb": "16px" }
+    },
+
+    "awayDivider": {
+      "default": { "line": "1px {color.*.accent}", "label": "{type.label} {color.*.accentText}", "copy": "WHILE YOU WERE AWAY · {n} ON TELEGRAM · since {time}" },
+      "read":    { "fadeAfter": "{motion.timing.awayDividerFade}" }
+    },
+
+    "footer": {
+      "healthy":      { "dot": "#5FB27A", "copy": "{host} · ~/.hoots · {size}" },
+      "reconnecting": { "dot": "{color.*.accent}", "copy": "reconnecting…" },
+      "quiet":        { "dot": "{color.*.quiet}", "copy": "can't reach the daemon · {since}" }
+    }
+  }
+}

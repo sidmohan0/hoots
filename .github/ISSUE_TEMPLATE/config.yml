@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/sidmohan0/hoots/security/policy
+    about: Do not open a public issue for anything exploitable — see SECURITY.md.
+  - name: Design decisions
+    url: https://github.com/sidmohan0/hoots/blob/main/docs/DECISIONS.md
+    about: Locked decisions. Read before proposing a change.
+  - name: Design boards
+    url: https://github.com/sidmohan0/hoots/tree/main/docs/design
+    about: The screens that fix the vocabulary and interaction grammar.
