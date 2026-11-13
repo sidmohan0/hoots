@@ -113,6 +113,29 @@ export function buildServer() {
   app.get("/v1/turns/:id/items", async (req: Post) =>
     db.prepare("SELECT * FROM items WHERE turn_id = ? ORDER BY seq").all(req.params.id));
 
+  // Retry = a fresh turn re-running the same user message, on the same surface.
+  app.post("/v1/turns/:id/retry", async (req: Post, reply: Reply) => {
+    const turn = db.prepare(`SELECT * FROM turns WHERE id = ?`).get(req.params.id) as any;
+    if (!turn) return reply.code(404).send({ error: "not found" });
+    if (turn.status !== "interrupted") return reply.code(409).send({ error: "turn is not interrupted" });
+    const lastUser = db
+      .prepare(`SELECT content FROM items WHERE turn_id = ? AND role = 'user' ORDER BY seq DESC LIMIT 1`)
+      .get(turn.id) as any;
+    if (!lastUser) return reply.code(409).send({ error: "no user message to retry" });
+    const text = String(JSON.parse(lastUser.content)?.text ?? "");
+    try {
+      const { turnId, queued, queueId } = await startTurn({
+        threadId: turn.thread_id,
+        trigger: turn.trigger,
+        message: text,
+        surface: turn.origin_surface,
+      });
+      return reply.code(202).send({ turn_id: turnId, queued, queue_id: queueId ?? null });
+    } catch (err: any) {
+      return reply.code(409).send({ error: String(err?.message ?? err) });
+    }
+  });
+
   // --- automations ---
   app.post("/v1/hoots/:id/automations", async (req: Post, reply: Reply) => {
     const { title, prompt, rrule, timezone, thread_kind, deliver } = req.body ?? {};
