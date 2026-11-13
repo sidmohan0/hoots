@@ -22,9 +22,9 @@ Product-layer names (whimsy allowed):
 | **bough**   | A hoot's primary, never-deleted thread. The hoot's continuous life-story. |
 | **hunt**    | A bounded task thread a hoot works (has a goal, runs to completion). |
 | **pellet**  | A rolling summary of a hoot's bough — the long-term memory. Regenerated as the bough grows. |
-| **herald**  | A channel bridge that carries messages between the outside world and the perch. v1 ships `herald-telegram`. |
+| **herald**  | A channel bridge that carries messages between the outside world and the perch. v1 ships `herald-telegram`; `herald-imessage` is opt-in on macOS. |
 | **molt**    | Replacing a hoot's model configuration without losing its memory. |
-| **night flight** | Autonomous background work outside a user-visible turn (reserved, v2). |
+| **night flight** | The nightly autonomous pass: every active hoot rereads its day, pins what matters, notes one thing for tomorrow. |
 | **screech** | Voice channel (reserved, v2). |
 | **talon**   | The tool interface a hoot can call (reserved; v1 tools are built-in). |
 
@@ -175,6 +175,18 @@ RRULEs are evaluated with the user's timezone from the automation record
 (`default_timezone`, RFC 5545 `DTSTART;TZID=`). Missed fires while the
 perch was down fire once on startup (coalesced), then resume the schedule.
 
+### Night flight
+
+`PERCH_NIGHT_FLIGHT` (default off) adds one autonomous pass at 03:00 local:
+every *active* hoot gets a `trigger: "automation"`, `origin_surface:
+"silent"` turn on its bough with a fixed prompt (reread today, pin what is
+worth carrying, note one thing for tomorrow — two short lines). The pass is
+claimed before it fires, keyed to the 03:00 occurrence, so a night slept
+through yields one catch-up run on boot and never a stack; each run logs one
+line. Paused hoots are skipped. Same rrule machinery as promises
+(`FREQ=DAILY;BYHOUR=3`), but not an `automations` row — it is not the
+user's to edit in v1.
+
 ---
 
 ## 5. API surface
@@ -220,7 +232,36 @@ event: automation.fired data: {automation_id, turn_id}
 ## 6. Channels (heralds)
 
 A herald is a connector that (a) receives inbound messages and (b) sends
-outbound messages, translating to/from the item ledger.
+outbound messages, translating to/from the item ledger. Every herald is an
+in-process module behind one contract (`perch/src/herald.ts`):
+
+```ts
+interface Herald {
+  id: string                                   // "herald-telegram"
+  start(ctx: HeraldContext): () => void        // returns a stop function
+}
+
+interface HeraldContext {
+  send(text: string, hootId: string): Promise<number>  // out: perch -> surface
+  deliver(hootId, chatKey, surface, text): Promise<unknown> // in: surface -> turn
+  transport(fn: (text, hootId) => Promise<number>): void    // herald installs `send`
+}
+```
+
+`surface` is the herald id minus the `herald-` prefix. The perch owns the
+ledger half of every herald so a new one never re-implements it: `deliver`
+resolves the hoot's bough, records surface read state for the "last heard
+from you" line, and starts a `trigger: "channel"` turn; `fanOut(item)` picks
+the heralds an outbound hoot message reaches and stamps `items.delivered`.
+A herald only translates to and from its own wire format.
+
+Fan-out policy: a turn answers on the surface it came from; an automation
+turn with `deliver: "channel"` (`origin_surface: "system"`) reaches every
+binding; nothing buzzes a phone while a web tab has been read in the last
+minute; web-origin and `silent` turns are recorded but never pushed.
+
+Registry: `registerHerald`, `activeHeralds`, `fanOut`, `startHeralds`,
+`stopHeralds`. Heralds are registered at boot from config, each opt-in.
 
 **herald-telegram (v1)**: long-polling Bot API (works behind NAT; no
 public endpoint required). Inbound chat message → `trigger: "channel"`
@@ -228,15 +269,28 @@ turn in the hoot's bough → replies delivered back to that chat. Hoots may
 proactively message any bound chat (automations with
 `deliver: "channel"`).
 
-Later heralds follow the same two-method contract; the perch exposes a
-register/queue interface so heralds can be out-of-process (v2).
+**herald-imessage (macOS, opt-in)**: requires `PERCH_IMESSAGE=true` *and*
+`PERCH_IMESSAGE_BUDDY` (comma-separated handles); registered only when both
+are set. Outbound shells out to `/usr/bin/osascript` and Messages.app,
+chunked at 3500 chars, skipping every send while no buddy is configured.
+Inbound polls `~/Library/Messages/chat.db` read-only every 5s for rows past
+a stored rowid (`meta` key `imessage:last_rowid`), keeps only the configured
+buddies, and delivers them on surface `imessage`. Two one-time macOS grants
+are needed — Automation (System Settings › Privacy & Security › Automation ›
+the terminal running the perch › Messages; AppleScript failure `-1743`) and
+Full Disk Access (… › Full Disk Access › the same terminal; failure
+`SQLITE_CANTOPEN`). Each logs a one-line hint, once, and the perch keeps
+running.
 
----
+Heralds run inside the perch process today. The registry is already shaped
+for out-of-process loaders — a child process or socket transport registers
+the same `Herald` and never touches the ledger — but no such loader ships
+yet.
 
 ## 7. Non-goals for v1
 
 - Computer use / remote environments.
-- Voice (screech), iMessage/email/slack heralds.
+- Voice (screech), email/slack heralds, out-of-process herald loaders.
 - Multi-user accounts, sharing, admin controls.
 - Vector memory (pellet + keyword recall only).
 - Model-agnostic providers beyond the OpenAI-compatible chat completions
@@ -244,5 +298,6 @@ register/queue interface so heralds can be out-of-process (v2).
 
 ## 8. Reserved words
 
-`night flight`, `screech`, `talon`, `roost`, `brood`, `molt`(as a command
-name). Do not reuse for other meanings.
+`screech`, `talon`, `roost`, `brood`, `molt`(as a command name). Do not
+reuse for other meanings. (`night flight` was reserved for exactly the
+nightly pass above and is no longer free.)

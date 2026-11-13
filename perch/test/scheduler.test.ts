@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { db, now, uuid } from "../src/db.js";
+import { config } from "../src/config.js";
 
 // Turns are not under test here; make them resolve instantly.
 vi.mock("../src/model.js", () => ({
@@ -123,6 +124,8 @@ describe("tickScheduler", () => {
 
   beforeEach(() => {
     db.exec("DELETE FROM automations; DELETE FROM items; DELETE FROM turns; DELETE FROM threads; DELETE FROM hoots;");
+    db.prepare("DELETE FROM meta WHERE key LIKE 'nightflight:%'").run();
+    config.nightFlight = false;
     db.prepare(
       `INSERT INTO hoots (id, name, status, model_base_url, model_name, model_params, system_prompt, created_at)
        VALUES (?, 'Juniper', 'active', 'http://127.0.0.1:1/v1', 'test-model', NULL, '', ?)`
@@ -164,6 +167,63 @@ describe("tickScheduler", () => {
     ).run(uuid(), hootId, daily("20260101T060000", "UTC"), now(), now() + 60_000);
 
     await scheduler.tickScheduler();
+    expect((db.prepare("SELECT COUNT(*) n FROM turns").get() as any).n).toBe(0);
+  });
+});
+
+describe("night flight", () => {
+  const hootId = uuid();
+  const threadId = uuid();
+
+  beforeEach(() => {
+    db.exec(
+      `DELETE FROM items; DELETE FROM turns; DELETE FROM queued_turns; DELETE FROM threads;
+       DELETE FROM read_state; DELETE FROM facts; DELETE FROM day_digests;
+       DELETE FROM automation_runs; DELETE FROM automations; DELETE FROM hoots;`
+    );
+    db.prepare("DELETE FROM meta WHERE key LIKE 'nightflight:%'").run();
+    db.prepare(
+      `INSERT INTO hoots (id, name, status, model_base_url, model_name, model_params, system_prompt, created_at)
+       VALUES (?, 'Juniper', 'active', 'http://127.0.0.1:1/v1', 'test-model', NULL, '', ?)`
+    ).run(hootId, now());
+    db.prepare(
+      `INSERT INTO threads (id, hoot_id, kind, status, created_at, updated_at)
+       VALUES (?, ?, 'bough', 'open', ?, ?)`
+    ).run(threadId, hootId, now(), now());
+  });
+
+  afterEach(() => {
+    config.nightFlight = false;
+  });
+
+  it("is off unless PERCH_NIGHT_FLIGHT is set", async () => {
+    config.nightFlight = false;
+    expect(await scheduler.tickNightFlight()).toBe(0);
+    expect((db.prepare("SELECT COUNT(*) n FROM turns").get() as any).n).toBe(0);
+  });
+
+  it("fires once per night on the silent surface and never stacks a missed night", async () => {
+    config.nightFlight = true;
+    // Three nights were slept through: the backlog still yields one flight.
+    db.prepare("INSERT INTO meta (key, value) VALUES ('nightflight:last_at', ?)")
+      .run(String(now() - 3 * 24 * 60 * 60_000));
+
+    expect(await scheduler.tickNightFlight()).toBe(1);
+    expect(await scheduler.tickNightFlight()).toBe(0);
+
+    const turns = db.prepare("SELECT trigger, origin_surface FROM turns").all() as any[];
+    expect(turns).toHaveLength(1);
+    expect(turns[0].trigger).toBe("automation");
+    expect(turns[0].origin_surface).toBe("silent");
+
+    const msg = db.prepare("SELECT content FROM items WHERE kind = 'message'").get() as any;
+    expect(JSON.parse(msg.content).text).toBe(scheduler.NIGHT_FLIGHT_PROMPT);
+  });
+
+  it("skips paused hoots", async () => {
+    config.nightFlight = true;
+    db.prepare("UPDATE hoots SET status = 'paused'").run();
+    expect(await scheduler.tickNightFlight()).toBe(0);
     expect((db.prepare("SELECT COUNT(*) n FROM turns").get() as any).n).toBe(0);
   });
 });

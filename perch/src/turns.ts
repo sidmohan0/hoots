@@ -110,7 +110,7 @@ export async function startTurn(opts: {
   trigger: "user" | "automation" | "channel" | "tool";
   message?: string | null;
   // 'silent' = automation turns with deliver=0: recorded, never pushed to a herald.
-  surface?: "web" | "telegram" | "system" | "silent";
+  surface?: "web" | "telegram" | "imessage" | "system" | "silent";
   missNote?: boolean;
 }): Promise<{ turnId: string; queued: boolean; queueId?: string }> {
   const thread = db.prepare("SELECT * FROM threads WHERE id = ?").get(opts.threadId) as any;

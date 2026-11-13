@@ -11,6 +11,7 @@ import { createAutomation, computeNextFire } from "./scheduler.js";
 import { proposePromise } from "./promise.js";
 import { bus } from "./stream.js";
 import { bindChannel, channelForChat } from "./herald-telegram.js";
+import { bindSurface, channelFor } from "./herald.js";
 
 type Post = { body: any; params: any; query: any };
 
@@ -87,7 +88,7 @@ export function buildServer() {
         return reply.code(400).send({ error: `message over ${MAX_MESSAGE_CHARS} characters` });
       }
     }
-    const surface: "web" | "telegram" | "system" | "silent" = (req.body?.surface as any) ?? "web";
+    const surface: "web" | "telegram" | "imessage" | "system" | "silent" = (req.body?.surface as any) ?? "web";
     try {
       const { turnId, queued, queueId } = await startTurn({
         threadId: thread.id, trigger: message ? "user" : "tool", message: message ?? null, surface,
@@ -318,6 +319,11 @@ export function buildServer() {
     return { ok: true };
   });
   app.get("/v1/channels/telegram/:chatId", async (req: Post) => channelForChat(req.params.chatId) ?? null);
+  app.post("/v1/hoots/:id/channels/imessage/:handle", async (req: Post) => {
+    bindSurface(req.params.id, "imessage", req.params.handle);
+    return { ok: true };
+  });
+  app.get("/v1/channels/imessage/:handle", async (req: Post) => channelFor("imessage", req.params.handle) ?? null);
 
   // --- Parliament (built UI), served same-origin ---
   const uiDir = path.join(import.meta.dirname ?? ".", "..", "..", "parliament", "dist");
