@@ -1,7 +1,8 @@
 import Fastify from "fastify";
 import { config } from "./config.js";
 import { db, now, uuid } from "./db.js";
-import { startTurn, getPellet, regeneratePellet } from "./turns.js";
+import { startTurn } from "./turns.js";
+import { getPellet, regeneratePellet } from "./pellet.js";
 import { createAutomation, computeNextFire } from "./scheduler.js";
 import { bus } from "./stream.js";
 import { bindChannel, channelForChat } from "./herald-telegram.js";

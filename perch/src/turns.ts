@@ -2,13 +2,10 @@ import { db, now, uuid } from "./db.js";
 import { runTurn, type ModelConfig, type TurnContext } from "./model.js";
 import { builtInTools } from "./tools.js";
 import { bus } from "./stream.js";
+import { pelletContextBlock, regeneratePellet } from "./pellet.js";
 
 const PELLET_EVERY_N_ITEMS = 50;
 const CONTEXT_WINDOW_ITEMS = 40;
-
-// --- pellet ---------------------------------------------------------------
-// v1: pellet = pinned notes + last summary, regenerated as a plain digest.
-// Summarization-via-model upgrade lands with the scheduler hardening pass.
 
 function boughItemCount(hootId: string): number {
   const row = db
@@ -20,35 +17,9 @@ function boughItemCount(hootId: string): number {
   return row.n;
 }
 
-export function pelletKey(hootId: string) {
-  return `pellet:${hootId}`;
-}
-
-export function getPellet(hootId: string): { facts: string[]; generated_at: number | null } {
-  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(pelletKey(hootId)) as any;
-  if (!row) return { facts: [], generated_at: null };
-  return JSON.parse(row.value);
-}
-
-export function regeneratePellet(hootId: string) {
-  const facts = db
-    .prepare(
-      `SELECT i.content FROM items i JOIN threads t ON t.id = i.thread_id
-       WHERE t.hoot_id = ? AND i.kind = 'note' ORDER BY i.created_at DESC LIMIT 200`
-    )
-    .all(hootId)
-    .map((r: any) => JSON.parse(r.content).fact);
-  db.prepare(
-    `INSERT INTO meta (key, value) VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-  ).run(pelletKey(hootId), JSON.stringify({ facts, generated_at: now() }));
-  return getPellet(hootId);
-}
-
 // --- context assembly ------------------------------------------------------
 
 function buildMessages(hoot: any, thread: any, userText: string | null) {
-  const pellet = getPellet(hoot.id);
   const history = db
     .prepare(
       `SELECT kind, role, content FROM items WHERE thread_id = ?
@@ -60,9 +31,8 @@ function buildMessages(hoot: any, thread: any, userText: string | null) {
 
   const messages: any[] = [];
   const systemParts = [hoot.system_prompt];
-  if (pellet.facts.length) {
-    systemParts.push(`Long-term memory (pinned facts):\n${pellet.facts.map((f) => `- ${f}`).join("\n")}`);
-  }
+  const memory = pelletContextBlock(hoot.id);
+  if (memory) systemParts.push(memory);
   messages.push({ role: "system", content: systemParts.join("\n\n") });
   for (const h of history) {
     const c = JSON.parse(h.content);
@@ -175,6 +145,8 @@ async function executeTurn(turnId: string, hoot: any, thread: any) {
   db.prepare(`UPDATE threads SET updated_at=? WHERE id=?`).run(now(), thread.id);
   bus.publish({ event: "turn.status", data: { turn_id: turnId, status: "completed" } });
 
-  // pellet upkeep: regenerate on growth threshold
-  if (boughItemCount(hoot.id) % PELLET_EVERY_N_ITEMS === 0) regeneratePellet(hoot.id);
+  // pellet upkeep: regenerate on growth threshold (async, failure-tolerant)
+  if (boughItemCount(hoot.id) % PELLET_EVERY_N_ITEMS === 0) {
+    regeneratePellet(hoot.id).catch(() => {});
+  }
 }
