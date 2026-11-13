@@ -6,10 +6,11 @@
   <string>com.hoots.perch</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>-lc</string>
-    <string>cd __REPO_ROOT__ && exec npm run start -w perch</string>
+    <string>__NODE__</string>
+    <string>__REPO_ROOT__/perch/dist/index.js</string>
   </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO_ROOT__/perch</string>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
@@ -20,10 +21,5 @@
   <string>__DATA_DIR__/perch.log</string>
   <key>StandardErrorPath</key>
   <string>__DATA_DIR__/perch.err.log</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PERCH_SKIP_DOTENV_NOTICE</key>
-    <string>1</string>
-  </dict>
 </dict>
 </plist>

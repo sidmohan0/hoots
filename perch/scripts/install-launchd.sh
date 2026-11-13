@@ -12,8 +12,17 @@ DATA_DIR="${PERCH_DATA_DIR:-$HOME/.hoots}"
 
 mkdir -p "$DATA_DIR" "$HOME/Library/LaunchAgents"
 
-# Substitute paths (repo root + data dir) into the plist.
+# Bake in the CURRENT node binary path: better-sqlite3 is compiled for this
+# exact Node ABI, and launchd's login shell may pick a different one.
+NODE_BIN="$(command -v node)"
+if [ -z "$NODE_BIN" ]; then
+  echo "node not found on PATH" >&2
+  exit 1
+fi
+
+# Substitute paths (repo root + data dir + node) into the plist.
 sed -e "s|__REPO_ROOT__|$REPO_ROOT|g" -e "s|__DATA_DIR__|$DATA_DIR|g" \
+    -e "s|__NODE__|$NODE_BIN|g" \
   "$PLIST_SRC" > "$PLIST_DST"
 
 # Stop any dev instance that would fight the agent for port 7420.

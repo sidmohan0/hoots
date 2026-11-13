@@ -99,6 +99,12 @@ export function buildServer() {
     if (newEnabled) db.prepare(`UPDATE automations SET next_fire_at=? WHERE id=?`).run(computeNextFire(a.rrule, a.timezone), a.id);
     return db.prepare("SELECT * FROM automations WHERE id = ?").get(a.id);
   });
+  app.delete("/v1/automations/:id", async (req: Post, reply: Reply) => {
+    const a = db.prepare("SELECT * FROM automations WHERE id = ?").get(req.params.id);
+    if (!a) return reply.code(404).send({ error: "not found" });
+    db.prepare("DELETE FROM automations WHERE id = ?").run(req.params.id);
+    return { ok: true };
+  });
 
   // --- pellet ---
   app.get("/v1/hoots/:id/pellet", async (req: Post) => getPellet(req.params.id));
