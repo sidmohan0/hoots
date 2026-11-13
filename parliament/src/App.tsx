@@ -4,6 +4,7 @@ import { dayKey, dayLabel, timeOf, useElapsed, useStream } from "./hooks";
 import { Glyph, type PresenceState } from "./Glyph";
 import { Markdown } from "./markdown";
 import { Toaster, toast } from "./toast";
+import { looksLikePromise, proposePromise, PromiseCard, type Proposal } from "./PromiseCard";
 import { Command } from "./Command";
 import { EmptyBough, NewHoot } from "./Onboarding";
 import { Settings } from "./Settings";
@@ -55,6 +56,10 @@ export function App() {
   const itemsRef = useRef<Item[]>([]);
   itemsRef.current = items;
   const [loaded, setLoaded] = useState(false);
+  const [proposal, setProposal] = useState<Proposal | null>(null);
+  const [proposing, setProposing] = useState(false);
+  const [proposalText, setProposalText] = useState("");
+  const [runs, setRuns] = useState<any[]>([]);
 
   useEffect(() => {
     applyStoredTheme();
@@ -123,6 +128,11 @@ export function App() {
     api.automations(hootId()).then(setAutomations).catch(() => {});
   };
   useEffect(loadFacts, [hootId()]);
+  const loadRuns = () => {
+    if (!hootId()) return;
+    api.promiseRuns(hootId(), dayKey(Date.now())).then(setRuns).catch(() => {});
+  };
+  useEffect(loadRuns, [hootId()]);
 
   // --- keyboard map: / composer · M memory · P promises · [ ] days · 1–9 hoots
   const dayKeys = useMemo(() => [...new Set(items.map((i) => dayKey(i.created_at)))].sort(), [items]);
@@ -211,6 +221,7 @@ export function App() {
     if (ev.event === "fact.changed") loadFacts();
     if (ev.event === "automation.fired") {
       api.automations(hootId()).then(setAutomations).catch(() => {});
+      loadRuns();
     }
   });
 
@@ -246,11 +257,54 @@ export function App() {
 
   const send = (text: string) => {
     if (!boughId) return;
+    // A cadence reads as a promise: propose first, schedule on confirm
+    // (board 05 — nothing is scheduled until "I promise").
+    if (!proposal && looksLikePromise(text)) {
+      setProposalText(text);
+      setProposing(true);
+      proposePromise(hootId(), text)
+        .then((p) => setProposal(p))
+        .catch(() => {
+          toast("Couldn't draft that promise · sending as a message");
+          sendNow(text);
+        })
+        .finally(() => setProposing(false));
+      return;
+    }
+    sendNow(text);
+  };
+
+  const sendNow = (text: string) => {
+    if (!boughId) return;
     const tid = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setPending((p) => [...p, { tid, text, at: Date.now(), status: "sending" }]);
     atBottom.current = true;
     setReplies(0);
     postTurn(tid, text);
+  };
+
+  const confirmPromise = (editedPrompt: string) => {
+    if (!proposal) return;
+    api
+      .createAutomation(hootId(), {
+        title: proposal.title,
+        prompt: editedPrompt,
+        rrule: proposal.rrule,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        thread_kind: "bough",
+        deliver: 1,
+      })
+      .then(() => {
+        loadFacts();
+        toast("Promise kept");
+      })
+      .catch(() => toast("That didn't go through · try again"));
+  };
+
+  const dismissProposal = () => {
+    const text = proposalText;
+    setProposal(null);
+    if (text) sendNow(text);
   };
 
   const retry = (p: Pending) => postTurn(p.tid, p.text);
@@ -285,7 +339,7 @@ export function App() {
       </nav>
 
       <main className="bough" ref={boughRef} onScroll={onBoughScroll}>
-        <PresenceHeader name={hootName} state={state} presence={presence} thinking={thinking} />
+        <PresenceHeader name={hootName} state={state} presence={presence} thinking={thinking} runs={runs} />
         {loaded && !items.length && !thinking && <EmptyBough onConnectTelegram={() => setSettings(true)} />}
         <Items
           items={items}
@@ -298,6 +352,20 @@ export function App() {
           boughRef={boughRef}
           focusDay={route.day}
         />
+        {proposing && !proposal && <p className="proposal-line pending">drafting the promise…</p>}
+        {proposal && (
+          <PromiseCard
+            proposal={proposal}
+            busy={false}
+            onConfirm={confirmPromise}
+            onDismiss={dismissProposal}
+            onEdit={() => {
+              setProposal(null);
+              composerRef.current?.focus();
+              window.dispatchEvent(new CustomEvent(COMPOSE_EVENT, { detail: proposalText }));
+            }}
+          />
+        )}
         <Composer onSend={send} busy={!!thinking} inputRef={composerRef} />
       </main>
 
@@ -311,7 +379,7 @@ export function App() {
         <Memory facts={facts} hootName={hootName} highlight={route.fact} onConfirm={(id) => factAction(() => api.confirmFact(id))} onForget={(id) => factAction(() => api.forgetFact(id))} onEdit={(id, text) => factAction(() => api.editFact(id, text))} />
       </Drawer>
       <Drawer side="right" open={drawer === "promises"} onClose={() => setDrawer(null)} label="Promises">
-        <Promises automations={automations} hootId={hootId()} onToggle={(id, enabled) => factAction(() => api.patchAutomation(id, { enabled }))} />
+        <Promises automations={automations} hootId={hootId()} runs={runs} onToggle={(id, enabled) => factAction(() => api.patchAutomation(id, { enabled }))} />
       </Drawer>
 
       <footer className="machine">
@@ -377,7 +445,9 @@ function hootId(): string {
 }
 
 // --- presence header (board 04B, voice rule: chrome is third person) ---------
-function PresenceHeader({ name, state, presence, thinking }: any) {
+function PresenceHeader({ name, state, presence, thinking, runs }: any) {
+  const sent = runs.filter((r: any) => r.outcome === "sent").length;
+  const missed = runs.filter((r: any) => r.outcome === "missed").length;
   const elapsed = useElapsed(thinking?.startedAt ?? null);
   const next = presence?.nextPromise
     ? new Date(presence.nextPromise).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
@@ -394,6 +464,7 @@ function PresenceHeader({ name, state, presence, thinking }: any) {
         <p className="chrome-line">
           {lastHeard ?? "no messages yet"}
           {next && !thinking ? ` · next check-in ${next}` : ""}
+          {runs.length > 0 && <span className="kept-counter"> · {sent} sent · {missed} missed</span>}
         </p>
       </div>
     </header>
@@ -778,11 +849,42 @@ function Memory({
   );
 }
 
-function Promises({ automations, onToggle }: { automations: Automation[]; hootId: string; onToggle: (id: string, enabled: boolean) => void }) {
+function Promises({
+  automations,
+  runs,
+  onToggle,
+}: {
+  automations: Automation[];
+  hootId: string;
+  runs: any[];
+  onToggle: (id: string, enabled: boolean) => void;
+}) {
   const today = dayKey(Date.now());
   const fmt = (ms: number) => timeOf(ms);
+  const upcoming = automations
+    .filter((a) => a.enabled && a.next_fire_at)
+    .sort((a, b) => (a.next_fire_at ?? 0) - (b.next_fire_at ?? 0));
   return (
     <div>
+      <p className="label">TODAY</p>
+      <ul className="runs">
+        {runs.map((r) => (
+          <li key={r.id} className="run-row">
+            <span className={`run-dot ${r.outcome}`} aria-hidden />
+            <span className="run-time">{timeOf(r.scheduled_at)}</span>
+            <span>{r.title}</span>
+            <span className="muted">· {r.outcome}</span>
+          </li>
+        ))}
+        {upcoming[0]?.next_fire_at && (
+          <li className="run-row">
+            <span className="run-dot next" aria-hidden />
+            <span className="run-time">{fmt(upcoming[0].next_fire_at)}</span>
+            <span>next</span>
+          </li>
+        )}
+        {!runs.length && !upcoming.length && <li className="run-row muted">nothing scheduled today</li>}
+      </ul>
       <p className="label">STANDING PROMISES</p>
       <ul className="promises">
         {automations.map((a) => {

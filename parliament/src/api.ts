@@ -41,6 +41,12 @@ export const api = {
   editFact: (id: string, text: string) => req<any>(`/v1/facts/${id}`, { method: "PATCH", body: JSON.stringify({ text }) }),
   forgetFact: (id: string) => req<{ ok: boolean }>(`/v1/facts/${id}`, { method: "DELETE" }),
   automations: (hootId: string) => req<any[]>(`/v1/hoots/${hootId}/automations`),
+  propose: (hootId: string, text: string) =>
+    req<any>(`/v1/hoots/${hootId}/propose-promise`, { method: "POST", body: JSON.stringify({ text }) }),
+  createAutomation: (hootId: string, body: any) =>
+    req<any>(`/v1/hoots/${hootId}/automations`, { method: "POST", body: JSON.stringify(body) }),
+  promiseRuns: (hootId: string, date: string) =>
+    req<any[]>(`/v1/hoots/${hootId}/promise-runs?date=${date}`),
   patchAutomation: (id: string, body: any) => req<any>(`/v1/automations/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   outbound: () => req<{ count: number; bytes: number }>("/v1/outbound/today"),
   pellet: (hootId: string) => req<any>(`/v1/hoots/${hootId}/pellet`),

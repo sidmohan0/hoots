@@ -282,3 +282,54 @@ button { font-family: var(--font-family-body); cursor: pointer; }
   .toast { animation: none; }
   .away-divider, .reply-pill, .item.pending, .switch span, .switch span::before { transition: none; }
 }
+
+/* promise card (board 05): dashed until promised, then it binds */
+.promise-card {
+  margin: var(--space-3) var(--space-6) var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--c-surface); border: 1.5px solid var(--c-text);
+  border-radius: var(--radius-xl); max-width: 620px;
+}
+.promise-card.kept { border-color: var(--c-line); background: var(--c-accent-wash); }
+.promise-kept { margin: 0; font-size: var(--type-small-fontSize, 13.5px); color: var(--c-accent-text); }
+.proposal-line { font-family: var(--font-family-display); font-size: var(--type-h3-fontSize, 18px); font-weight: 600; margin: 0 0 var(--space-2); }
+.proposal-line.pending { color: var(--c-text-muted); font-family: var(--font-family-mono); font-size: 12px; padding: 0 var(--space-6); }
+.chips { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-2); }
+.time-chip {
+  font-family: var(--font-family-mono); font-size: 14px; background: var(--c-text); color: var(--c-bg);
+  border-radius: var(--radius-md); padding: 2px var(--space-2); font-variant-numeric: tabular-nums;
+}
+.time-chip.conflict {
+  background: var(--c-accent-wash); color: var(--c-accent-text);
+  border: 1.5px dashed var(--c-accent-text);
+}
+.conflict-banner {
+  background: var(--c-accent-wash); color: var(--c-accent-text); border-radius: var(--radius-sm);
+  padding: var(--space-2); font-size: var(--type-small-fontSize, 13.5px); margin: var(--space-2) 0;
+}
+.assumptions { color: var(--c-text-muted); font-size: 12px; margin: var(--space-1) 0 var(--space-2); }
+.card-field { display: block; margin: var(--space-2) 0; }
+.card-field textarea {
+  width: 100%; font-family: var(--font-family-body); font-size: var(--type-small-fontSize, 13.5px);
+  line-height: 1.45; color: var(--c-text); background: var(--c-bg-sunken);
+  border: 1px solid var(--c-line); border-radius: var(--radius-md); padding: var(--space-2); resize: vertical;
+}
+.card-field textarea:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.card-row { font-size: var(--type-small-fontSize, 13.5px); margin: var(--space-1) 0; }
+.card-actions { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+.btn-secondary {
+  height: 36px; padding: 0 var(--space-3); background: var(--c-surface); color: var(--c-text);
+  border: 1px solid var(--c-text); border-radius: var(--radius-md); font-size: 13.5px;
+}
+.btn-ghost { height: 36px; padding: 0 var(--space-3); background: transparent; color: var(--c-text-soft); border: 1px solid var(--c-line); border-radius: var(--radius-md); font-size: 13.5px; }
+
+/* today panel in the promises drawer (board 05 left) */
+.run-row { display: flex; gap: var(--space-2); align-items: baseline; font-size: var(--type-small-fontSize, 13.5px); padding: var(--space-1) 0; }
+.run-dot { width: 12px; height: 12px; border-radius: var(--radius-pill); flex: none; }
+.run-dot.sent { background: var(--c-text); }
+.run-dot.late { background: var(--c-text); opacity: .55; }
+.run-dot.missed { border: 2px solid var(--c-text); background: transparent; }
+.run-dot.next { border: 2px solid var(--c-accent-text); background: var(--c-accent-wash); }
+.run-dot.later { border: 2px solid var(--c-line-strong); }
+.run-time { font-family: var(--font-family-mono); font-variant-numeric: tabular-nums; }
+.kept-counter { font-family: var(--font-family-mono); font-size: 11px; color: var(--c-text-muted); }
