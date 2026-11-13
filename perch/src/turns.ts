@@ -1,4 +1,4 @@
-import { db, now, uuid } from "./db.js";
+import { db, now, uuid, localDate } from "./db.js";
 import { runTurn, type ModelConfig, type TurnContext } from "./model.js";
 import { builtInTools } from "./tools.js";
 import { bus } from "./stream.js";
@@ -15,6 +15,14 @@ function boughItemCount(hootId: string): number {
     )
     .get(hootId) as any;
   return row.n;
+}
+
+// A write that lands on an already-digested past day must not leave a stale
+// digest behind (DECISIONS.md #9: digests describe, they don't forecast).
+export function invalidateDigestIfPast(hootId: string, createdAt: number) {
+  const date = localDate(createdAt);
+  if (date >= localDate()) return;
+  db.prepare(`DELETE FROM day_digests WHERE hoot_id = ? AND date = ?`).run(hootId, date);
 }
 
 // --- context assembly ------------------------------------------------------
@@ -127,10 +135,12 @@ export async function startTurn(opts: {
 
   const surface = opts.surface ?? "web";
   if (opts.message) {
+    const createdAt = now();
     db.prepare(
       `INSERT INTO items (id, turn_id, thread_id, seq, kind, role, content, surface, created_at)
        VALUES (?, ?, ?, (SELECT COALESCE(MAX(seq),0)+1 FROM items WHERE thread_id = ?), 'message', 'user', ?, ?, ?)`
-    ).run(uuid(), turnId, thread.id, thread.id, JSON.stringify({ text: opts.message }), surface, now());
+    ).run(uuid(), turnId, thread.id, thread.id, JSON.stringify({ text: opts.message }), surface, createdAt);
+    invalidateDigestIfPast(hoot.id, createdAt);
   }
 
   bus.publish({ event: "turn.status", data: { turn_id: turnId, status: "in_progress" } });
@@ -188,10 +198,12 @@ async function executeTurn(turnId: string, hoot: any, thread: any, missNote = fa
     onItem: (item) => {
       seq += 1;
       const id = uuid();
+      const createdAt = now();
       db.prepare(
         `INSERT INTO items (id, turn_id, thread_id, seq, kind, role, content, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(id, turnId, thread.id, seq, item.kind, item.role ?? null, JSON.stringify(item.content), now());
+      ).run(id, turnId, thread.id, seq, item.kind, item.role ?? null, JSON.stringify(item.content), createdAt);
+      invalidateDigestIfPast(hoot.id, createdAt);
       bus.publish({ event: "item.append", data: { item: { id, turn_id: turnId, thread_id: thread.id, seq, ...item } } });
     },
   });
