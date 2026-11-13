@@ -19,7 +19,7 @@ export function buildServer() {
 
   app.addHook("onRequest", async (req, reply) => {
     if (req.url === "/v1/health") return;
-    if (req.url === "/" || req.url.startsWith("/assets/") || req.url.startsWith("/v1/stream")) return; // UI is same-origin local
+    if (req.url === "/" || req.url.startsWith("/assets/") || req.url === "/appicon.png" || req.url.startsWith("/v1/stream")) return; // UI is same-origin local
     const auth = req.headers.authorization;
     if (auth !== `Bearer ${config.authToken}`) {
       return reply.code(401).send({ error: "unauthorized" });
@@ -179,7 +179,19 @@ export function buildServer() {
     return db.prepare(`SELECT * FROM facts WHERE id = ?`).get(f.id);
   });
   app.delete("/v1/facts/:id", async (req: Post) => {
+    const f = db.prepare(`SELECT * FROM facts WHERE id = ?`).get(req.params.id) as any;
     db.prepare(`UPDATE facts SET forgotten_at = ? WHERE id = ?`).run(now(), req.params.id);
+    // Keep the ledger honest: the note item that taught this fact is undone too,
+    // so a later pellet refresh doesn't re-pin it.
+    if (f?.source_item_id) {
+      const item = db.prepare(`SELECT content FROM items WHERE id = ?`).get(f.source_item_id) as any;
+      if (item) {
+        const note = JSON.parse(item.content);
+        if (typeof note?.fact === "string")
+          db.prepare(`UPDATE items SET content = ? WHERE id = ?`)
+            .run(JSON.stringify({ fact: note.fact, undone: true }), f.source_item_id);
+      }
+    }
     bus.publish({ event: "fact.changed", data: { fact_id: req.params.id } });
     return { ok: true };
   });
@@ -204,10 +216,16 @@ export function buildServer() {
   app.get("/", async (req, reply) => {
     const file = path.join(uiDir, "index.html");
     if (existsSync(file)) {
-      reply.type("text/html").send(readFileSync(file));
+      const html = readFileSync(file, "utf8").replace("__HOOT_TOKEN__", config.authToken);
+      reply.type("text/html").send(html);
     } else {
       reply.code(503).send("Parliament not built — run `npm run build -w parliament`");
     }
+  });
+  app.get("/appicon.png", async (_req, reply) => {
+    const file = path.join(uiDir, "appicon.png");
+    if (!existsSync(file)) return reply.code(404).send();
+    reply.type("image/png").send(readFileSync(file));
   });
   app.get("/assets/*", async (req, reply) => {
     const rel = (req.params as any)["*"];
@@ -225,7 +243,8 @@ export function buildServer() {
       "cache-control": "no-cache",
       connection: "keep-alive",
     });
-    const since = Number(req.query.since ?? 0);
+    const lastId = Number((req.headers["last-event-id"] as string) ?? 0);
+    const since = Number(req.query.since ?? 0) || lastId;
     for (const ev of bus.since(since)) {
       reply.raw.write(`id: ${ev.id}\nevent: ${ev.event}\ndata: ${JSON.stringify(ev.data)}\n\n`);
     }

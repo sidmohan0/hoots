@@ -1,0 +1,95 @@
+// Typed API client for the perch. Same-origin; token injected into index.html.
+
+function token(): string {
+  const meta = document.querySelector('meta[name="hoot-token"]');
+  return meta?.getAttribute("content") ?? "";
+}
+
+async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token()}`,
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (!res.ok) throw new Error(`${init?.method ?? "GET"} ${path} → ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
+export const api = {
+  hoots: () => req<any[]>("/v1/hoots"),
+  hoot: (id: string) => req<any>(`/v1/hoots/${id}`),
+  createHoot: (body: any) => req<any>("/v1/hoots", { method: "POST", body: JSON.stringify(body) }),
+  patchHoot: (id: string, body: any) => req<any>(`/v1/hoots/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  threads: (hootId: string) => req<any[]>(`/v1/hoots/${hootId}/threads`),
+  items: (threadId: string) => req<any[]>(`/v1/threads/${threadId}/items`),
+  send: (threadId: string, message: string, surface = "web") =>
+    req<{ turn_id: string; queued: boolean }>(`/v1/threads/${threadId}/turns`, {
+      method: "POST",
+      body: JSON.stringify({ message, surface }),
+    }),
+  presence: (hootId: string) => req<any>(`/v1/hoots/${hootId}/presence`),
+  read: (hootId: string, surface = "web") =>
+    req<{ ok: boolean }>(`/v1/hoots/${hootId}/read`, { method: "POST", body: JSON.stringify({ surface }) }),
+  readState: (hootId: string) => req<{ surface: string; last_read_at: number }[]>(`/v1/hoots/${hootId}/read`),
+  digest: (hootId: string, date: string) =>
+    req<{ date: string; digest: string | null }>(`/v1/hoots/${hootId}/digest/${date}`),
+  facts: (hootId: string) => req<any[]>(`/v1/hoots/${hootId}/facts`),
+  confirmFact: (id: string) => req<any>(`/v1/facts/${id}`, { method: "PATCH", body: JSON.stringify({ confidence: "confirmed" }) }),
+  editFact: (id: string, text: string) => req<any>(`/v1/facts/${id}`, { method: "PATCH", body: JSON.stringify({ text }) }),
+  forgetFact: (id: string) => req<{ ok: boolean }>(`/v1/facts/${id}`, { method: "DELETE" }),
+  automations: (hootId: string) => req<any[]>(`/v1/hoots/${hootId}/automations`),
+  patchAutomation: (id: string, body: any) => req<any>(`/v1/automations/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  outbound: () => req<{ count: number; bytes: number }>("/v1/outbound/today"),
+  pellet: (hootId: string) => req<any>(`/v1/hoots/${hootId}/pellet`),
+};
+
+export type Item = {
+  id: string;
+  turn_id: string;
+  thread_id: string;
+  seq: number;
+  kind: "message" | "tool_call" | "tool_result" | "note";
+  role: "user" | "hoot" | "system" | null;
+  content: string; // JSON
+  surface: string | null;
+  delivered: string;
+  created_at: number;
+};
+
+export type Presence = {
+  status: "awake" | "thinking" | "sleeping" | "quiet";
+  lastHeard: { at: number; surface: string } | null;
+  nextPromise: number | null;
+};
+
+export type Fact = {
+  id: string;
+  hoot_id: string;
+  text: string;
+  category: string | null;
+  scope: string;
+  source_item_id: string | null;
+  confidence: "pinned" | "confirmed" | "extracted";
+  created_at: number;
+  forgotten_at: number | null;
+  source_thread_id?: string | null;
+};
+
+export type Automation = {
+  id: string;
+  hoot_id: string;
+  title: string;
+  prompt: string;
+  rrule: string;
+  timezone: string;
+  enabled: number;
+  thread_kind: string;
+  deliver: number;
+  last_fired_at: number | null;
+  next_fire_at: number | null;
+};
+
+export type StreamEvt = { id: number; event: string; data: any };

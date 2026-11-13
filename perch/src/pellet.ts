@@ -71,7 +71,9 @@ function pinnedFacts(hootId: string): string[] {
   const facts = new Set<string>();
   for (const r of rows) {
     try {
-      const fact = JSON.parse(r.content)?.fact;
+      const note = JSON.parse(r.content);
+      if (note?.undone) continue; // "won't remember this" — stays undone
+      const fact = note?.fact;
       if (typeof fact === "string" && fact.trim()) facts.add(fact.trim());
     } catch {
       // skip malformed note content
