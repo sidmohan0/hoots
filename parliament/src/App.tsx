@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api, type Automation, type Fact, type Item, type Presence } from "./api";
 import { dayKey, dayLabel, timeOf, useElapsed, useStream } from "./hooks";
 import { Glyph, type PresenceState } from "./Glyph";
+import { Markdown } from "./markdown";
+import { Toaster, toast } from "./toast";
 
 // Parliament v0.2 — boards 03 (IA), 04B (v1 base), 07 (interaction notes).
 // One view (the hoot), two drawers, machine footer. ⌘K palette lands next.
@@ -13,6 +15,17 @@ type Live = {
   turnState: Record<string, { status: string; startedAt: number }>;
   queued: { text: string; at: number }[];
 };
+
+// A locally-held user item that the server hasn't echoed yet.
+type Pending = { tid: string; text: string; at: number; status: "sending" | "failed"; turnId?: string };
+
+// tokens: motion.timing.awayDividerFade (mirrored in app.css for the transition)
+const AWAY_FADE_MS = 1500;
+// tokens: component.item / “scrolled up” threshold for the reply pill
+const NEAR_BOTTOM_PX = 400;
+
+const reducedMotion = () =>
+  typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 export function App() {
   const [hoots, setHoots] = useState<any[]>([]);
@@ -31,6 +44,11 @@ export function App() {
   const [webRead, setWebRead] = useState<number>(() => Date.now() - 7 * 86_400_000);
   const boughRef = useRef<HTMLDivElement>(null);
   const [boughId, setBoughId] = useState<string | null>(null);
+  const [pending, setPending] = useState<Pending[]>([]);
+  const [replies, setReplies] = useState(0);
+  const atBottom = useRef(true);
+  const itemsRef = useRef<Item[]>([]);
+  itemsRef.current = items;
 
   // --- load hoots + pick active ---
   useEffect(() => {
@@ -91,27 +109,48 @@ export function App() {
   useEffect(loadFacts, [hootId()]);
 
   // --- SSE ---
-  useStream((ev) => {
+  const stream = useStream((ev) => {
     if (ev.event === "item.append") {
       const item = ev.data.item as Item;
+      const text = textOf(item);
       setItems((prev) => (prev.some((p) => p.id === item.id) ? prev : [...prev, item]));
       if (item.role === "user") {
-        setQueued((q) => q.filter((x) => JSON.parse(item.content).text.trim() !== x.text.trim()));
-        setThinking((t) => (t && item.turn_id === t.turnId ? t : t));
+        // the server echo retires the optimistic bubble: turn id first, else the
+        // earliest unassigned bubble with the same text (identical sends match once)
+        setPending((p) => {
+          const key = text.trim();
+          let done = false;
+          return p.filter((x) => {
+            if (x.turnId) return x.turnId !== item.turn_id;
+            if (!done && key && x.text.trim() === key) {
+              done = true;
+              return false;
+            }
+            return true;
+          });
+        });
+        setQueued((q) => q.filter((x) => x.text.trim() !== text.trim()));
       }
-      if (item.role === "hoot") markRead();
-      // scroll if near bottom
-      requestAnimationFrame(() => {
-        const el = boughRef.current;
-        if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 400) el.scrollTop = el.scrollHeight;
-      });
+      if (item.role === "hoot") {
+        markRead();
+        // never yank a reader who has scrolled up — show the pill instead
+        if (atBottom.current) scrollToBottom();
+        else setReplies((n) => n + 1);
+      } else if (atBottom.current) scrollToBottom();
     }
     if (ev.event === "turn.status") {
       const { turn_id, status } = ev.data;
       if (status === "in_progress") setThinking((t) => (t?.turnId === turn_id ? t : { turnId: turn_id, startedAt: Date.now() }));
       if (status === "completed" || status === "interrupted") {
         setThinking((t) => (t?.turnId === turn_id ? null : t));
-        if (status === "interrupted") loadFacts();
+        // no ghost bubbles if a turn ends without its echo
+        setPending((p) => p.filter((x) => x.turnId !== turn_id));
+        if (status === "interrupted") {
+          loadFacts();
+          const last = [...itemsRef.current].reverse().find((i) => i.turn_id === turn_id && i.role === "user");
+          const retryText = last ? textOf(last) : "";
+          if (retryText) toast("That didn't go through · try again", { label: "retry", run: () => send(retryText) });
+        }
       }
     }
     if (ev.event === "fact.changed") loadFacts();
@@ -120,18 +159,57 @@ export function App() {
     }
   });
 
-  const send = async (text: string) => {
+  const scrollToBottom = () => {
+    const el = boughRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: reducedMotion() ? "auto" : "smooth" });
+    atBottom.current = true;
+    setReplies(0);
+  };
+
+  const onBoughScroll = () => {
+    const el = boughRef.current;
+    if (!el) return;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+    atBottom.current = near;
+    if (near && replies) setReplies(0);
+  };
+
+  // POST one turn for a pending bubble; the bubble itself is the optimistic item.
+  const postTurn = async (tid: string, text: string) => {
     if (!boughId) return;
-    setQueued((q) => [...q, { text, at: Date.now() }]);
+    setPending((p) => p.map((x) => (x.tid === tid ? { ...x, status: "sending" } : x)));
     try {
-      await api.send(boughId, text, "web");
+      const res = await api.send(boughId, text, "web");
+      setPending((p) => p.map((x) => (x.tid === tid ? { ...x, turnId: res.turn_id } : x)));
+      setQueued((q) => [...q, { text, at: Date.now() }]);
     } catch {
-      setQueued((q) => q.filter((x) => x.text !== text));
+      setPending((p) => p.map((x) => (x.tid === tid ? { ...x, status: "failed" } : x)));
+      toast("That didn't go through · try again", { label: "retry", run: () => postTurn(tid, text) });
     }
   };
 
+  const send = (text: string) => {
+    if (!boughId) return;
+    const tid = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setPending((p) => [...p, { tid, text, at: Date.now(), status: "sending" }]);
+    atBottom.current = true;
+    setReplies(0);
+    postTurn(tid, text);
+  };
+
+  const retry = (p: Pending) => postTurn(p.tid, p.text);
+
+  // Every drawer write goes through here so a failure is one toast with a retry.
+  const factAction = (run: () => Promise<unknown>) => {
+    run()
+      .then(loadFacts)
+      .catch(() => toast("That didn't go through · try again", { label: "retry", run: () => factAction(run) }));
+  };
+
   const hootName = hoots.find((h) => h.id === hootId())?.name ?? "Hoot";
-  const state: PresenceState = thinking ? "thinking" : (presence?.status as PresenceState) ?? "awake";
+  const state: PresenceState =
+    thinking ? "thinking" : stream.status === "quiet" ? "quiet" : (presence?.status as PresenceState) ?? "awake";
 
   return (
     <div className="shell">
@@ -154,23 +232,32 @@ export function App() {
         </button>
       </nav>
 
-      <main className="bough" ref={boughRef}>
+      <main className="bough" ref={boughRef} onScroll={onBoughScroll}>
         <PresenceHeader name={hootName} state={state} presence={presence} thinking={thinking} />
         <Items
           items={items}
           thinking={thinking}
           queued={queued}
+          pending={pending}
+          onRetry={retry}
           away={away}
           webRead={webRead}
-                  />
+          boughRef={boughRef}
+        />
         <Composer onSend={send} busy={!!thinking} />
       </main>
 
+      {replies > 0 && (
+        <button className="reply-pill" onClick={scrollToBottom}>
+          {hootName} replied{replies > 1 ? ` ${replies} times` : ""} ▽
+        </button>
+      )}
+
       <Drawer side="right" open={drawer === "memory"} onClose={() => setDrawer(null)} label="Memory">
-        <Memory facts={facts} hootName={hootName} onConfirm={(id) => api.confirmFact(id).then(loadFacts)} onForget={(id) => api.forgetFact(id).then(loadFacts)} onEdit={(id, text) => api.editFact(id, text).then(loadFacts)} />
+        <Memory facts={facts} hootName={hootName} onConfirm={(id) => factAction(() => api.confirmFact(id))} onForget={(id) => factAction(() => api.forgetFact(id))} onEdit={(id, text) => factAction(() => api.editFact(id, text))} />
       </Drawer>
       <Drawer side="right" open={drawer === "promises"} onClose={() => setDrawer(null)} label="Promises">
-        <Promises automations={automations} hootId={hootId()} onToggle={(id, enabled) => api.patchAutomation(id, { enabled }).then(loadFacts)} />
+        <Promises automations={automations} hootId={hootId()} onToggle={(id, enabled) => factAction(() => api.patchAutomation(id, { enabled }))} />
       </Drawer>
 
       <footer className="machine">
@@ -181,15 +268,34 @@ export function App() {
           promises
         </button>
         <span className="spacer" />
-        <span>sids-mbp</span>
-        <span>127.0.0.1:7420</span>
-        <span>~/.hoots</span>
+        <span className={`conn-dot ${stream.status}`} aria-hidden />
+        {stream.status === "quiet" ? (
+          <span className="conn quiet">can't reach the daemon{stream.since ? ` · since ${timeOf(stream.since)}` : ""}</span>
+        ) : stream.status === "reconnecting" ? (
+          <span className="conn">reconnecting…</span>
+        ) : (
+          <>
+            <span>sids-mbp</span>
+            <span>127.0.0.1:7420</span>
+            <span>~/.hoots</span>
+          </>
+        )}
         <span>
           {outbound ? `${outbound.count} sent out today` : "—"} →
         </span>
       </footer>
+      <Toaster />
     </div>
   );
+}
+
+// Failure surfaces for drawer writes; retry re-runs the same mutation.
+function textOf(item: Item): string {
+  try {
+    return String(JSON.parse(item.content)?.text ?? "");
+  } catch {
+    return "";
+  }
 }
 
 function hootId(): string {
@@ -221,20 +327,25 @@ function PresenceHeader({ name, state, presence, thinking }: any) {
 }
 
 // --- items + day folding (board 04A) -----------------------------------------
-type TempItem = { temp: true; text: string; at: number };
 
 function Items({
   items,
   thinking,
   queued,
+  pending,
+  onRetry,
   away,
   webRead,
+  boughRef,
 }: {
   items: Item[];
   thinking: { turnId: string; startedAt: number } | null;
   queued: { text: string; at: number }[];
+  pending: Pending[];
+  onRetry: (p: Pending) => void;
   away: { count: number; since: number } | null;
   webRead: number;
+  boughRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [digests, setDigests] = useState<Record<string, string>>({});
@@ -279,9 +390,7 @@ function Items({
                   <React.Fragment key={it.id}>
                     {away && !awayShown && it.surface === "telegram" && it.created_at > webRead && ((awayShown = true),
                     (
-                      <div className="away-divider" key={`away-${it.id}`}>
-                        WHILE YOU WERE AWAY · {away.count} ON TELEGRAM · since {timeOf(away.since)}
-                      </div>
+                      <AwayDivider away={away} boughRef={boughRef} key={`away-${it.id}`} />
                     ))}
                     <ItemRow item={it} />
                     {i === dayItems.length - 1 && thinking && <ThinkingCard startedAt={thinking.startedAt} />}
@@ -295,6 +404,9 @@ function Items({
           </section>
         );
       })}
+      {pending.map((p) => (
+        <PendingRow key={p.tid} p={p} onRetry={() => onRetry(p)} />
+      ))}
       {queued.map((q) => (
         <div className="queued-chip" key={q.at}>
           queued next · “{q.text.length > 40 ? q.text.slice(0, 40) + "…" : q.text}”
@@ -304,8 +416,106 @@ function Items({
   );
 }
 
+// The divider is a reading aid, not furniture: it scrolls itself near the top
+// on load, then fades out for good on first user scroll or once it leaves the
+// viewport (tokens: component.awayDivider.read, motion.timing.awayDividerFade).
+function AwayDivider({
+  away,
+  boughRef,
+}: {
+  away: { count: number; since: number };
+  boughRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [phase, setPhase] = useState<"shown" | "fading" | "gone">("shown");
+  const faded = useRef(false);
+
+  const fade = () => {
+    if (faded.current) return;
+    faded.current = true;
+    setPhase("fading");
+    setTimeout(() => setPhase("gone"), AWAY_FADE_MS);
+  };
+
+  // park the divider near the top rather than the bottom of the bough
+  useEffect(() => {
+    const bough = boughRef.current;
+    const el = ref.current;
+    if (!bough || !el) return;
+    const delta = el.getBoundingClientRect().top - bough.getBoundingClientRect().top;
+    bough.scrollTop = Math.max(0, bough.scrollTop + delta - 96);
+  }, []);
+
+  // first *user* scroll (our own placement fires scroll too, so arm late)
+  useEffect(() => {
+    const bough = boughRef.current;
+    if (!bough) return;
+    let armed = false;
+    const arm = setTimeout(() => (armed = true), 350);
+    const onScroll = () => {
+      if (armed) fade();
+    };
+    bough.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      clearTimeout(arm);
+      bough.removeEventListener("scroll", onScroll);
+    };
+  }, []);
+
+  // …or as soon as it scrolls out of view
+  useEffect(() => {
+    const el = ref.current;
+    const root = boughRef.current;
+    if (!el || !root || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([e]) => !e.isIntersecting && fade(), { root });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  if (phase === "gone") return null;
+  return (
+    <div ref={ref} className={`away-divider${phase === "fading" ? " fading" : ""}`}>
+      WHILE YOU WERE AWAY · {away.count} ON TELEGRAM · since {timeOf(away.since)}
+    </div>
+  );
+}
+
+// Optimistic user bubble. Optimistic is dashed-adjacent: 0.7 opacity while
+// sending, quiet meta + click-to-retry when the POST failed.
+function PendingRow({ p, onRetry }: { p: Pending; onRetry: () => void }) {
+  const failed = p.status === "failed";
+  return (
+    <div className="item mine pending">
+      <div
+        className={`bubble${failed ? " clickable" : ""}`}
+        onClick={failed ? onRetry : undefined}
+        role={failed ? "button" : undefined}
+        tabIndex={failed ? 0 : undefined}
+        onKeyDown={
+          failed
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onRetry();
+                }
+              }
+            : undefined
+        }
+      >
+        <p className="plain">{p.text}</p>
+      </div>
+      <p className={`meta${failed ? " failed" : ""}`}>{failed ? "didn't send · retry" : "sending…"}</p>
+    </div>
+  );
+}
+
 function ItemRow({ item }: { item: Item }) {
-  const c = JSON.parse(item.content);
+  let c: any = {};
+  try {
+    c = JSON.parse(item.content);
+  } catch {
+    c = { text: item.content };
+  }
   if (item.kind === "note") {
     return (
       <div className="noted-chip">
@@ -319,12 +529,13 @@ function ItemRow({ item }: { item: Item }) {
   return (
     <div className={`item ${mine ? "mine" : "theirs"}`}>
       <div className="bubble">
-        <p>{c.text}</p>
+        {mine ? <p className="plain">{String(c.text ?? "")}</p> : <Markdown text={String(c.text ?? "")} />}
       </div>
       <p className="meta">
         {timeOf(item.created_at)}
         {item.surface === "telegram" && <span className="surface"> · via Telegram</span>}
-        {mine && <span> · sent</span>}
+        {/* `sent` only once the server item exists — nothing optimistic gets here */}
+        {mine && <span className="sent-mark"> · sent</span>}
       </p>
     </div>
   );
