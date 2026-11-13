@@ -12,12 +12,14 @@
     "dev": "npm run dev -w perch",
     "build": "npm run build -w perch",
     "test": "vitest run",
+    "lint": "oxlint perch/src perch/test parliament/src",
     "typecheck": "npm run typecheck -w perch && npm run typecheck -w parliament"
   },
   "engines": {
     "node": ">=22"
   },
   "devDependencies": {
+    "oxlint": "^1.93.0",
     "vitest": "^3.2.7"
   }
 }

@@ -4,6 +4,7 @@ const { RRule } = rrulePkg as any;
 import { db, now, uuid, LATE_GRACE_MS, recordAutomationRun, claimMissNote } from "./db.js";
 import { startTurn } from "./turns.js";
 import { bus } from "./stream.js";
+import { notifyWebhook } from "./outbound.js";
 
 // --- timezone math ---------------------------------------------------------
 // rrule's tzid support generates candidates as UTC-naive dates whose fields are
@@ -153,6 +154,10 @@ export async function tickScheduler(deliverFn?: (hootId: string, text: string) =
         outcome: late ? "late" : "sent",
       });
       bus.publish({ event: "automation.fired", data: { automation_id: a.id, turn_id: turnId } });
+      notifyWebhook(
+        { event: "automation.fired", automation_id: a.id, hoot_id: a.hoot_id, turn_id: turnId, outcome: late ? "late" : "sent", ts: firedAt },
+        "automation.fired"
+      );
       if (a.deliver && deliverFn) {
         // v1: deliver the automation prompt acknowledgment flow — the turn's
         // outbound message is delivered by the herald watching for hoot messages.

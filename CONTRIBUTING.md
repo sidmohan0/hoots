@@ -57,6 +57,41 @@ decisions are not relitigated in PRs — amend the doc instead. If your change
 touches presence grammar, the accent rule, the composer, the memory surface, or
 anything in the vocabulary budget, say so in the PR and link the decision.
 
+## Operations
+
+The perch keeps everything in one SQLite file at `$PERCH_DATA_DIR/perch.db`
+(default `~/.hoots`). Back it up on a schedule and before any risky work.
+
+```bash
+perch/scripts/backup.sh                       # -> ~/.hoots/backups/perch-<ts>.db.gz
+perch/scripts/restore.sh <backup.db.gz>       # verifies, snapshots, swaps in
+```
+
+`backup.sh` copies through `sqlite3 .backup`, so a running daemon cannot hand
+you a torn file; it verifies `integrity_check` before compressing, prunes to the
+last 14 archives, and exits non-zero on any failure (cron/launchd friendly).
+`restore.sh` refuses a corrupt archive, saves the current database beside it as
+`perch.db.pre-restore-<ts>` first, drops the stale `-wal`/`-shm`, and prints the
+`launchctl kickstart` line to restart the agent.
+
+```bash
+# nightly 03:20 via launchd/cron
+20 3 * * * PERCH_DATA_DIR=$HOME/.hoots $REPO/perch/scripts/backup.sh
+```
+
+Logs are JSON lines on stdout. `PERCH_LOG_FILE` also appends them to a file,
+rotated at 5 MB with three kept copies; `PERCH_LOG_LEVEL` sets the threshold
+(`debug|info|warn|error`, default `info`). Secret-looking fields are redacted
+before either sink sees them.
+
+`PERCH_RATE_LIMIT` caps POSTs per client IP and route family, per minute
+(default 30, `0` disables). A limited caller gets `429` with `Retry-After`.
+
+The HTTP surface is documented (hand-written, `perch/src/openapi.ts`) at
+`GET /v1/openapi.json`. Update it with any route change. Schema changes are
+numbered migrations in `perch/src/migrate.ts` — append one, never edit a
+shipped one.
+
 ## Tests
 
 ```bash

@@ -2,10 +2,13 @@ import Fastify from "fastify";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
-import { db, now, uuid, recordAutomationRun, localDate, localDayBounds } from "./db.js";
+import { db, now, uuid, recordAutomationRun, localDate, localDayBounds, getMeta, setMeta } from "./db.js";
+import { logger } from "./log.js";
+import { check, clientKey, limitPerMinute } from "./ratelimit.js";
+import { openapi } from "./openapi.js";
 import { startTurn, busyState } from "./turns.js";
 import { getPellet, regeneratePellet } from "./pellet.js";
-import { ensureDigest, getDigest } from "./digests.js";
+import { ensureDigest } from "./digests.js";
 import { outboundToday } from "./outbound.js";
 import { createAutomation, computeNextFire } from "./scheduler.js";
 import { proposePromise } from "./promise.js";
@@ -21,8 +24,11 @@ type Reply = { code: (c: number) => { send: (x: unknown) => unknown } };
 export function buildServer() {
   const app = Fastify({ logger: false });
 
+  const startedAt = new WeakMap<object, number>();
+
   app.addHook("onRequest", async (req, reply) => {
-    if (req.url === "/v1/health") return;
+    startedAt.set(req, performance.now());
+    if (req.url === "/v1/health" || req.url === "/v1/openapi.json") return;
     if (req.url === "/" || req.url.startsWith("/assets/") || req.url === "/appicon.png" || req.url.startsWith("/v1/stream")) return; // UI is same-origin local
     const auth = req.headers.authorization;
     if (auth !== `Bearer ${config.authToken}`) {
@@ -30,7 +36,47 @@ export function buildServer() {
     }
   });
 
+  // POSTs only: a turn start or a model call is the expensive thing, plain
+  // reads are not. Bucket is per client IP + path family.
+  app.addHook("preHandler", async (req, reply) => {
+    if (req.method !== "POST") return;
+    const pathname = req.url.split("?")[0];
+    const verdict = check(clientKey(req.ip, pathname));
+    if (!verdict.ok) {
+      logger.warn("rate limited", { ip: req.ip, path: pathname, limit: verdict.limit, retry_after: verdict.retryAfter });
+      reply.header("retry-after", String(verdict.retryAfter));
+      return reply.code(429).send({ error: "too many requests", retry_after: verdict.retryAfter });
+    }
+  });
+
+  app.addHook("onResponse", async (req, reply) => {
+    logger.info("request", {
+      method: req.method,
+      path: req.url.split("?")[0],
+      status: reply.statusCode,
+      duration_ms: Math.round(performance.now() - (startedAt.get(req) ?? performance.now())),
+    });
+  });
+
   app.get("/v1/health", async () => ({ ok: true, version: "0.0.1" }));
+
+  // Machine-readable route list; auth-free like /v1/health so it is greppable
+  // from a browser on the loopback.
+  app.get("/v1/openapi.json", async () => openapi);
+
+  // --- settings ---
+  const readWebhookUrl = () => getMeta("webhook_url") || null;
+  app.get("/v1/settings", async () => ({ webhook_url: readWebhookUrl(), rate_limit_per_min: limitPerMinute() }));
+  app.patch("/v1/settings", async (req: Post, reply: Reply) => {
+    const { webhook_url } = req.body ?? {};
+    if (webhook_url !== undefined && webhook_url !== null && webhook_url !== "") {
+      if (typeof webhook_url !== "string" || !/^https?:\/\/\S+$/.test(webhook_url)) {
+        return reply.code(400).send({ error: "webhook_url must be an http(s) URL" });
+      }
+    }
+    setMeta("webhook_url", typeof webhook_url === "string" ? webhook_url : "");
+    return { webhook_url: readWebhookUrl() };
+  });
 
   // --- hoots ---
   app.post("/v1/hoots", async (req: Post, reply: Reply) => {

@@ -3,6 +3,7 @@ import { runTurn, type ModelConfig, type TurnContext } from "./model.js";
 import { builtInTools } from "./tools.js";
 import { bus } from "./stream.js";
 import { pelletContextBlock, regeneratePellet } from "./pellet.js";
+import { notifyWebhook } from "./outbound.js";
 
 const PELLET_EVERY_N_ITEMS = 50;
 const CONTEXT_WINDOW_ITEMS = 40;
@@ -211,6 +212,12 @@ async function executeTurn(turnId: string, hoot: any, thread: any, missNote = fa
   releaseTurn(thread.id, turnId, "completed");
   db.prepare(`UPDATE threads SET updated_at=? WHERE id=?`).run(now(), thread.id);
   bus.publish({ event: "turn.status", data: { turn_id: turnId, status: "completed" } });
+
+  // Best-effort webhook; nothing about the turn waits on it.
+  notifyWebhook(
+    { event: "turn.completed", hoot_id: hoot.id, thread_id: thread.id, turn_id: turnId, ts: now() },
+    "turn.completed"
+  );
 
   // pellet upkeep: regenerate on growth threshold (async, failure-tolerant)
   if (boughItemCount(hoot.id) % PELLET_EVERY_N_ITEMS === 0) {
