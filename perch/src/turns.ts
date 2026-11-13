@@ -88,19 +88,17 @@ export async function startTurn(opts: {
   const hoot = db.prepare("SELECT * FROM hoots WHERE id = ?").get(thread.hoot_id) as any;
   if (!hoot || hoot.status !== "active") throw new Error("hoot is not active");
 
-  if (opts.message) {
-    db.prepare(
-      `INSERT INTO items (id, turn_id, thread_id, seq, kind, role, content, created_at)
-       VALUES (?, 'pending', ?, (SELECT COALESCE(MAX(seq),0)+1 FROM items WHERE thread_id = ?), 'message', 'user', ?, ?)`
-    ).run(uuid(), thread.id, thread.id, JSON.stringify({ text: opts.message }), now());
-  }
-
   const turnId = uuid();
   db.prepare(
     `INSERT INTO turns (id, thread_id, status, trigger, started_at) VALUES (?, ?, 'in_progress', ?, ?)`
   ).run(turnId, thread.id, opts.trigger, now());
-  // re-point the user message item at the real turn
-  db.prepare(`UPDATE items SET turn_id = ? WHERE turn_id = 'pending' AND thread_id = ?`).run(turnId, thread.id);
+
+  if (opts.message) {
+    db.prepare(
+      `INSERT INTO items (id, turn_id, thread_id, seq, kind, role, content, created_at)
+       VALUES (?, ?, ?, (SELECT COALESCE(MAX(seq),0)+1 FROM items WHERE thread_id = ?), 'message', 'user', ?, ?)`
+    ).run(uuid(), turnId, thread.id, thread.id, JSON.stringify({ text: opts.message }), now());
+  }
 
   bus.publish({ event: "turn.status", data: { turn_id: turnId, status: "in_progress" } });
 

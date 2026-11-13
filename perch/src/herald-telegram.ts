@@ -41,7 +41,9 @@ export function startTelegramHerald(token: string) {
     if (!thread) return;
     const channels = db.prepare(`SELECT * FROM channels WHERE hoot_id = ? AND kind = 'telegram'`).all(thread.hoot_id) as any[];
     for (const ch of channels) {
-      const text = JSON.parse(item.content).text;
+      const raw = item.content;
+      const parsed = typeof raw === "string" ? (() => { try { return JSON.parse(raw); } catch { return {}; } })() : raw;
+      const text = parsed?.text;
       if (text) await sendMessage(ch.external_id, text, token).catch(() => {});
     }
   });
@@ -65,7 +67,8 @@ export function startTelegramHerald(token: string) {
             .prepare(`SELECT id FROM threads WHERE hoot_id = ? AND kind = 'bough'`)
             .get(ch.hoot_id) as any;
           if (!bough) continue;
-          await startTurn({ threadId: bough.id, trigger: "channel", message: msg.text });
+          const text = msg.text === "/start" ? "Hello!" : msg.text;
+          await startTurn({ threadId: bough.id, trigger: "channel", message: text });
         }
       } catch {
         await new Promise((r) => setTimeout(r, 5000));
