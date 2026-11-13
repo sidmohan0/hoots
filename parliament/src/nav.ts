@@ -1,6 +1,6 @@
 // URL is the router. No full reloads: pushState + a DOM event the app listens
 // for (DECISIONS #3: one view, two drawers, ⌘K lands in the bough).
-// Params: ?hoot=<id>&day=<YYYY-MM-DD>&d=memory|promises&fact=<id>
+// Params: ?hoot=<id>&day=<YYYY-MM-DD>&d=memory|promises&fact=<id>&topic=<word>
 
 import { useEffect, useState } from "react";
 
@@ -11,6 +11,7 @@ export type Route = {
   day: string | null;
   drawer: Drawer;
   fact: string | null;
+  topic: string | null;
 };
 
 export const NAV_EVENT = "hoots:navigate";
@@ -21,9 +22,10 @@ export type RoutePatch = {
   day?: string | null;
   d?: string | null;
   fact?: string | null;
+  topic?: string | null;
 };
 
-const PARAMS = ["hoot", "day", "d", "fact"] as const;
+const PARAMS = ["hoot", "day", "d", "fact", "topic"] as const;
 
 export function readRoute(search = location.search): Route {
   const q = new URLSearchParams(search);
@@ -33,6 +35,7 @@ export function readRoute(search = location.search): Route {
     day: q.get("day"),
     drawer: d === "memory" || d === "promises" ? d : null,
     fact: q.get("fact"),
+    topic: q.get("topic"),
   };
 }
 
@@ -61,11 +64,17 @@ export function navigate(patch: RoutePatch): void {
 
 export function goHoot(hoot: string): void {
   localStorage.setItem("hootId", hoot);
-  commit({ hoot, day: null, fact: null }, false);
+  // topics are per-hoot, so a hoot switch drops the filter with the day/fact.
+  commit({ hoot, day: null, fact: null, topic: null }, false);
 }
 
 export function goDay(hoot: string, day: string | null): void {
   commit({ hoot, day }, false);
+}
+
+/** Filter the bough by a topic word (⌘K TOPICS); the bough stays the page. */
+export function goTopic(hoot: string, topic: string): void {
+  commit({ hoot, topic, day: null }, false);
 }
 
 export function openFact(hoot: string, fact: string): void {

@@ -11,6 +11,7 @@ import { createAutomation, computeNextFire } from "./scheduler.js";
 import { proposePromise } from "./promise.js";
 import { bus } from "./stream.js";
 import { bindChannel, channelForChat } from "./herald-telegram.js";
+import { deriveTopics } from "./topics.js";
 
 type Post = { body: any; params: any; query: any };
 
@@ -121,6 +122,16 @@ export function buildServer() {
 
   app.get("/v1/threads/:id/items", async (req: Post) =>
     db.prepare("SELECT * FROM items WHERE thread_id = ? ORDER BY created_at, seq").all(req.params.id));
+
+  // --- topics (⌘K) ---
+  // Recurring keywords in the hoot's messages. `?q=` narrows; `/v1/topics` is
+  // the flat alias the palette uses so it can search across hoots.
+  app.get("/v1/hoots/:id/topics", async (req: Post) => deriveTopics(req.params.id, (req.query as any).q));
+  app.get("/v1/topics", async (req: Post, reply: Reply) => {
+    const hoot: string | undefined = (req.query as any).hoot;
+    if (!hoot) return reply.code(400).send({ error: "hoot required" });
+    return deriveTopics(hoot, (req.query as any).q);
+  });
   app.get("/v1/turns/:id/items", async (req: Post) =>
     db.prepare("SELECT * FROM items WHERE turn_id = ? ORDER BY seq").all(req.params.id));
 
@@ -280,11 +291,33 @@ export function buildServer() {
   app.patch("/v1/facts/:id", async (req: Post, reply: Reply) => {
     const f = db.prepare(`SELECT * FROM facts WHERE id = ?`).get(req.params.id) as any;
     if (!f) return reply.code(404).send({ error: "not found" });
-    const { text, confidence } = req.body ?? {};
-    db.prepare(`UPDATE facts SET text = COALESCE(?, text), confidence = COALESCE(?, confidence) WHERE id = ?`)
-      .run(text ?? null, confidence ?? null, f.id);
+    const { text, confidence, scope } = req.body ?? {};
+    // Promotion to global is always explicit (DECISIONS.md #13).
+    if (scope !== undefined && scope !== "global" && scope !== "hoot") {
+      return reply.code(400).send({ error: "scope must be 'global' or 'hoot'" });
+    }
+    db.prepare(
+      `UPDATE facts SET text = COALESCE(?, text), confidence = COALESCE(?, confidence), scope = COALESCE(?, scope) WHERE id = ?`
+    ).run(text ?? null, confidence ?? null, scope ?? null, f.id);
     bus.publish({ event: "fact.changed", data: { fact_id: f.id, hoot_id: f.hoot_id } });
     return db.prepare(`SELECT * FROM facts WHERE id = ?`).get(f.id);
+  });
+
+  // Facts shared with every hoot ("everywhere" in the memory drawer).
+  app.get("/v1/facts", async (req: Post, reply: Reply) => {
+    const scope = (req.query as any).scope;
+    if (scope === "global") {
+      return db
+        .prepare(
+          `SELECT f.*, h.name AS hoot_name FROM facts f JOIN hoots h ON h.id = f.hoot_id
+           WHERE f.scope = 'global' AND f.forgotten_at IS NULL ORDER BY f.created_at DESC`
+        )
+        .all();
+    }
+    if (scope !== undefined && scope !== "hoot") return reply.code(400).send({ error: "scope must be 'global' or 'hoot'" });
+    return db
+      .prepare(`SELECT f.*, h.name AS hoot_name FROM facts f JOIN hoots h ON h.id = f.hoot_id WHERE f.forgotten_at IS NULL ORDER BY f.created_at DESC`)
+      .all();
   });
   app.delete("/v1/facts/:id", async (req: Post) => {
     const f = db.prepare(`SELECT * FROM facts WHERE id = ?`).get(req.params.id) as any;

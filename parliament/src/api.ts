@@ -38,8 +38,11 @@ export const api = {
   digest: (hootId: string, date: string) =>
     req<{ date: string; digest: string | null }>(`/v1/hoots/${hootId}/digest/${date}`),
   facts: (hootId: string) => req<any[]>(`/v1/hoots/${hootId}/facts`),
+  globalFacts: () => req<any[]>(`/v1/facts?scope=global`),
   confirmFact: (id: string) => req<any>(`/v1/facts/${id}`, { method: "PATCH", body: JSON.stringify({ confidence: "confirmed" }) }),
   editFact: (id: string, text: string) => req<any>(`/v1/facts/${id}`, { method: "PATCH", body: JSON.stringify({ text }) }),
+  patchFactScope: (id: string, scope: "global" | "hoot") =>
+    req<any>(`/v1/facts/${id}`, { method: "PATCH", body: JSON.stringify({ scope }) }),
   forgetFact: (id: string) => req<{ ok: boolean }>(`/v1/facts/${id}`, { method: "DELETE" }),
   automations: (hootId: string) => req<any[]>(`/v1/hoots/${hootId}/automations`),
   propose: (hootId: string, text: string) =>
@@ -51,6 +54,8 @@ export const api = {
   patchAutomation: (id: string, body: any) => req<any>(`/v1/automations/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   outbound: () => req<{ count: number; bytes: number }>("/v1/outbound/today"),
   pellet: (hootId: string) => req<any>(`/v1/hoots/${hootId}/pellet`),
+  topics: (hootId: string, q: string) =>
+    req<{ topic: string; count: number }[]>(`/v1/topics?hoot=${encodeURIComponent(hootId)}&q=${encodeURIComponent(q)}`),
 };
 
 export type Item = {
@@ -83,6 +88,7 @@ export type Fact = {
   created_at: number;
   forgotten_at: number | null;
   source_thread_id?: string | null;
+  hoot_name?: string;
 };
 
 export type Automation = {

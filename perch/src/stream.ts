@@ -6,7 +6,9 @@ export type StreamEvent =
   | { event: "hoot.updated"; data: Record<string, unknown> }
   | { event: "automation.fired"; data: Record<string, unknown> }
   | { event: "fact.changed"; data: Record<string, unknown> }
-  | { event: "promise.changed"; data: Record<string, unknown> };
+  | { event: "promise.changed"; data: Record<string, unknown> }
+  | { event: "thread.created"; data: Record<string, unknown> }
+  | { event: "thread.updated"; data: Record<string, unknown> };
 
 export type TaggedEvent = StreamEvent & { id: number };
 
