@@ -1,5 +1,7 @@
 import OpenAI from "openai";
-import { db, now, getMeta, setMeta } from "./db.js";
+import { db, now, getMeta, setMeta, uuid } from "./db.js";
+import { logOutbound } from "./outbound.js";
+import { bus } from "./stream.js";
 import { config } from "./config.js";
 
 // The pellet is a hoot's long-term memory: a rolling summary of its bough plus
@@ -147,7 +149,8 @@ function fitPellet(p: Pellet): Pellet {
   return { ...p, facts, summary };
 }
 
-async function askModel(current: Pellet, batch: any[]): Promise<{ summary: string; add: string[]; remove: string[] }> {
+type FactAdd = { text: string; category?: string; guess?: boolean };
+async function askModel(current: Pellet, batch: any[]): Promise<{ summary: string; add: FactAdd[]; remove: string[] }> {
   const client = new OpenAI({ baseURL: config.openaiBaseUrl, apiKey: config.openaiApiKey });
   const messages = batch.map((r) => ({
     at: new Date(r.created_at).toISOString(),
@@ -156,9 +159,9 @@ async function askModel(current: Pellet, batch: any[]): Promise<{ summary: strin
   const prompt =
     "Update the rolling summary and extract durable facts about the user.\n\n" +
     "Reply with ONLY a JSON object of the shape:\n" +
-    '{"summary": string, "facts_update": {"add": string[], "remove": string[]}}\n\n' +
+    '{"summary": string, "facts_update": {"add": [{"text": string, "category": string, "guess": boolean}], "remove": string[]}}\n\n' +
     '- "summary": an updated rolling summary of the agent\'s shared history with the user, under 300 words.\n' +
-    '- "facts_update.add": new durable facts worth remembering (preferences, projects, people, dates, decisions).\n' +
+    '- "facts_update.add": new durable facts worth remembering. Each has "text" (the literal fact), "category" (one of: person, project, routine, preference, date, other), and "guess" (true when the fact is an inference rather than something the user said outright).\n' +
     '- "facts_update.remove": exact copies of existing durable facts that are no longer true or no longer relevant.\n' +
     "Do not remove pinned facts. Reply with JSON only, no prose.";
 
@@ -171,6 +174,7 @@ async function askModel(current: Pellet, batch: any[]): Promise<{ summary: strin
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
+      logOutbound("model", "pellet refresh", userPayload.length);
       const res = await client.chat.completions.create({
         model: PELLET_MODEL,
         messages: [
@@ -184,11 +188,12 @@ async function askModel(current: Pellet, batch: any[]): Promise<{ summary: strin
       if (!parsed || typeof parsed.summary !== "string" || typeof parsed.facts_update !== "object") {
         throw new Error("unparseable pellet response");
       }
-      return {
-        summary: parsed.summary,
-        add: Array.isArray(parsed.facts_update.add) ? parsed.facts_update.add.map(String).filter(Boolean) : [],
-        remove: Array.isArray(parsed.facts_update.remove) ? parsed.facts_update.remove.map(String) : [],
-      };
+      const rawAdd = Array.isArray(parsed.facts_update.add) ? parsed.facts_update.add : [];
+      const add: FactAdd[] = rawAdd
+        .map((f: any) => (typeof f === "string" ? { text: f } : { text: String(f?.text ?? ""), category: f?.category, guess: !!f?.guess }))
+        .filter((f: FactAdd) => f.text.trim());
+      const remove: string[] = Array.isArray(parsed.facts_update.remove) ? parsed.facts_update.remove.map(String) : [];
+      return { summary: parsed.summary, add, remove };
     } catch (err) {
       lastErr = err;
       // parse failures retry once; a second failure falls through to "keep previous"
@@ -219,18 +224,34 @@ export async function regeneratePellet(hootId: string): Promise<Pellet> {
     const removeSet = new Set(remove.map((r) => r.trim().toLowerCase()).filter(Boolean));
     const kept = removable.filter((f) => !removeSet.has(f.trim().toLowerCase()));
     const merged = [...pinned];
-    for (const f of [...kept, ...add]) {
+    for (const f of [...kept, ...add.map((a) => a.text)]) {
       const key = f.trim();
       if (key && !pinned.has(key) && !merged.some((m) => m.toLowerCase() === key.toLowerCase())) merged.push(key);
     }
 
-    const next = fitPellet({
-      facts: merged,
-      summary,
-      generated_at: now(),
-      cursor_item_id: batch[batch.length - 1].id,
-    });
+    const cursorItemId = batch[batch.length - 1].id;
+
+    // Persist fact adds/removes to the facts table (DECISIONS.md #13).
+    const existing = db
+      .prepare(`SELECT id, text, confidence FROM facts WHERE hoot_id = ? AND forgotten_at IS NULL`)
+      .all(hootId) as any[];
+    for (const f of add) {
+      const key = f.text.trim().toLowerCase();
+      if (existing.some((e) => e.text.toLowerCase() === key)) continue;
+      db.prepare(
+        `INSERT INTO facts (id, hoot_id, text, category, scope, source_item_id, confidence, created_at)
+         VALUES (?, ?, ?, ?, 'hoot', ?, ?, ?)`
+      ).run(uuid(), hootId, f.text.trim(), f.category ?? null, cursorItemId, f.guess ? "extracted" : "confirmed", now());
+    }
+    for (const r of remove) {
+      const key = r.trim().toLowerCase();
+      const row = existing.find((e) => e.text.toLowerCase() === key && e.confidence !== "pinned");
+      if (row) db.prepare(`UPDATE facts SET forgotten_at = ? WHERE id = ?`).run(now(), row.id);
+    }
+
+    const next = fitPellet({ facts: merged, summary, generated_at: now(), cursor_item_id: cursorItemId });
     savePellet(hootId, next);
+    bus.publish({ event: "fact.changed", data: { hoot_id: hootId } });
     return next;
   } catch {
     return current;
@@ -240,12 +261,26 @@ export async function regeneratePellet(hootId: string): Promise<Pellet> {
 // Rendered for injection into the system prompt ahead of the recent window.
 export function pelletContextBlock(hootId: string): string {
   const p = getPellet(hootId);
+  const facts = db
+    .prepare(
+      `SELECT text FROM facts WHERE forgotten_at IS NULL AND (hoot_id = ? OR scope = 'global')
+       ORDER BY created_at LIMIT 60`
+    )
+    .all(hootId) as any[];
   const parts: string[] = [];
-  if (p.facts.length) {
-    parts.push(`Long-term memory:\n${p.facts.map((f) => `- ${f}`).join("\n")}`);
+  if (facts.length) {
+    parts.push(`Long-term memory:\n${facts.map((f) => `- ${f.text}`).join("\n")}`);
   }
   if (p.summary) {
     parts.push(`Summary of our history: ${p.summary}`);
   }
   return parts.join("\n");
+}
+
+/** remember() writes a pinned fact: note item + facts row in one go. */
+export function pinFact(hootId: string, text: string, sourceItemId: string | null): void {
+  db.prepare(
+    `INSERT INTO facts (id, hoot_id, text, category, scope, source_item_id, confidence, created_at)
+     VALUES (?, ?, ?, 'other', 'hoot', ?, 'pinned', ?)`
+  ).run(uuid(), hootId, text, sourceItemId, now());
 }

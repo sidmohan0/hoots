@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { logOutbound } from "./outbound.js";
 import type { ChatCompletionMessageParam, ChatCompletionTool, ChatCompletionMessageFunctionToolCall } from "openai/resources/chat/completions/completions.js";
 import type { FunctionParameters } from "openai/resources/shared.js";
 
@@ -43,6 +44,7 @@ export async function runTurn(
 
   const convo = [...messages];
   for (let hop = 0; hop < ToolLoopMaxHops; hop++) {
+    logOutbound("model", `turn ${ctx.turnId} hop ${hop + 1}`, JSON.stringify(convo).length);
     const res = await client.chat.completions.create({
       model: model.model,
       messages: convo,

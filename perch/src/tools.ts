@@ -1,5 +1,6 @@
 import { db, now, uuid } from "./db.js";
 import type { ToolDef } from "./model.js";
+import { pinFact } from "./pellet.js";
 
 // Full-text recall over the hoot's bough history (messages + pinned notes),
 // backed by the items_fts FTS5 index. Falls back to a plain LIKE scan if FTS
@@ -81,10 +82,12 @@ export function builtInTools(): ToolDef[] {
       },
       execute: (args: { fact: string }, ctx) => {
         const turn = db.prepare("SELECT thread_id FROM turns WHERE id = ?").get(ctx.turnId) as any;
+        const itemId = uuid();
         db.prepare(
           `INSERT INTO items (id, turn_id, thread_id, seq, kind, role, content, created_at)
            VALUES (?, ?, ?, (SELECT COALESCE(MAX(seq),0)+1 FROM items WHERE turn_id = ?), 'note', NULL, ?, ?)`
-        ).run(uuid(), ctx.turnId, turn.thread_id, ctx.turnId, JSON.stringify({ fact: args.fact }), now());
+        ).run(itemId, ctx.turnId, turn.thread_id, ctx.turnId, JSON.stringify({ fact: args.fact }), now());
+        pinFact(ctx.hootId, args.fact, itemId);
         return { ok: true };
       },
     },

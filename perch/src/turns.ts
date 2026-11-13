@@ -49,14 +49,14 @@ function buildMessages(hoot: any, thread: any, userText: string | null) {
 // by every caller (API, herald, scheduler). better-sqlite3 transactions are
 // synchronous, so check-and-insert is atomic; BEGIN IMMEDIATE takes the write
 // lock up front to avoid deferred-transaction upgrade races.
-const claimTurn = db.transaction((threadId: string, turnId: string, trigger: string, startedAt: number) => {
+const claimTurn = db.transaction((threadId: string, turnId: string, trigger: string, startedAt: number, surface: string) => {
   const busy = db
     .prepare(`SELECT id FROM turns WHERE thread_id = ? AND status = 'in_progress' LIMIT 1`)
     .get(threadId);
   if (busy) throw new Error("thread is busy with another turn");
   db.prepare(
-    `INSERT INTO turns (id, thread_id, status, trigger, started_at) VALUES (?, ?, 'in_progress', ?, ?)`
-  ).run(turnId, threadId, trigger, startedAt);
+    `INSERT INTO turns (id, thread_id, status, trigger, started_at, origin_surface) VALUES (?, ?, 'in_progress', ?, ?, ?)`
+  ).run(turnId, threadId, trigger, startedAt, surface);
 });
 
 /** Close out a turn (the DB analogue of releasing the old in-memory lock). */
@@ -85,7 +85,8 @@ export async function startTurn(opts: {
   threadId: string;
   trigger: "user" | "automation" | "channel" | "tool";
   message?: string | null;
-}): Promise<string> {
+  surface?: "web" | "telegram" | "system";
+}): Promise<{ turnId: string; queued: boolean }> {
   const thread = db.prepare("SELECT * FROM threads WHERE id = ?").get(opts.threadId) as any;
   if (!thread) throw new Error(`thread ${opts.threadId} not found`);
 
@@ -93,25 +94,56 @@ export async function startTurn(opts: {
   if (!hoot || hoot.status !== "active") throw new Error("hoot is not active");
 
   const turnId = uuid();
-  claimTurn.immediate(thread.id, turnId, opts.trigger, now());
+  try {
+    claimTurn.immediate(thread.id, turnId, opts.trigger, now(), opts.surface ?? "web");
+  } catch {
+    // Composer never blocks (DECISIONS.md #6): queue it; it starts when the
+    // in-flight turn lands.
+    db.prepare(`INSERT INTO queued_turns (id, thread_id, message, surface, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .run(uuid(), thread.id, opts.message ?? "", opts.surface ?? "web", now());
+    return { turnId: "", queued: true };
+  }
 
+  const surface = opts.surface ?? "web";
   if (opts.message) {
     db.prepare(
-      `INSERT INTO items (id, turn_id, thread_id, seq, kind, role, content, created_at)
-       VALUES (?, ?, ?, (SELECT COALESCE(MAX(seq),0)+1 FROM items WHERE thread_id = ?), 'message', 'user', ?, ?)`
-    ).run(uuid(), turnId, thread.id, thread.id, JSON.stringify({ text: opts.message }), now());
+      `INSERT INTO items (id, turn_id, thread_id, seq, kind, role, content, surface, created_at)
+       VALUES (?, ?, ?, (SELECT COALESCE(MAX(seq),0)+1 FROM items WHERE thread_id = ?), 'message', 'user', ?, ?, ?)`
+    ).run(uuid(), turnId, thread.id, thread.id, JSON.stringify({ text: opts.message }), surface, now());
   }
 
   bus.publish({ event: "turn.status", data: { turn_id: turnId, status: "in_progress" } });
 
   // execute async; API returns turn id immediately
-  executeTurn(turnId, hoot, thread).catch((err) => {
+  executeTurn(turnId, hoot, thread).finally(() => drainQueue(thread.id)).catch((err) => {
     const msg = String(err?.message ?? err);
     releaseTurn(thread.id, turnId, "interrupted", msg);
     bus.publish({ event: "turn.status", data: { turn_id: turnId, status: "interrupted", error: msg } });
   });
 
-  return turnId;
+  return { turnId, queued: false };
+}
+
+/** Start the next queued turn for a thread, if any (DECISIONS.md #6). */
+async function drainQueue(threadId: string) {
+  const next = db
+    .prepare(`SELECT * FROM queued_turns WHERE thread_id = ? ORDER BY created_at LIMIT 1`)
+    .get(threadId) as any;
+  if (!next) return;
+  db.prepare(`DELETE FROM queued_turns WHERE id = ?`).run(next.id);
+  try {
+    await startTurn({ threadId, trigger: "user", message: next.message, surface: next.surface as any });
+  } catch {
+    // re-queue if the thread is somehow busy again
+    db.prepare(`INSERT INTO queued_turns (id, thread_id, message, surface, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .run(uuid(), threadId, next.message, next.surface, now());
+  }
+}
+
+/** Boot: queued turns survive restarts; drain them after reconciliation. */
+export async function drainAllQueues() {
+  const rows = db.prepare(`SELECT DISTINCT thread_id FROM queued_turns`).all() as any[];
+  for (const r of rows) await drainQueue(r.thread_id);
 }
 
 async function executeTurn(turnId: string, hoot: any, thread: any) {

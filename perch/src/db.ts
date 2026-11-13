@@ -159,3 +159,59 @@ if (getMeta("fts_backfilled") === null) {
     setMeta("fts_backfilled", String(now()));
   })();
 }
+
+// --- migrations -------------------------------------------------------------
+function hasColumn(table: string, col: string): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as any[];
+  return cols.some((c) => c.name === col);
+}
+function addColumn(table: string, ddl: string, col: string) {
+  if (!hasColumn(table, col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+}
+addColumn("turns", "origin_surface TEXT NOT NULL DEFAULT 'web'", "origin_surface");
+addColumn("items", "surface TEXT", "surface");
+addColumn("items", "delivered TEXT NOT NULL DEFAULT ''", "delivered");
+
+// Canonical facts (pellet writes here; summary stays in meta)
+db.exec(`CREATE TABLE IF NOT EXISTS facts (
+  id TEXT PRIMARY KEY,
+  hoot_id TEXT NOT NULL REFERENCES hoots(id),
+  text TEXT NOT NULL,
+  category TEXT,
+  scope TEXT NOT NULL DEFAULT 'hoot',
+  source_item_id TEXT,
+  confidence TEXT NOT NULL DEFAULT 'extracted',
+  created_at INTEGER NOT NULL,
+  forgotten_at INTEGER
+)`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS day_digests (
+  hoot_id TEXT NOT NULL REFERENCES hoots(id),
+  date TEXT NOT NULL,
+  text TEXT NOT NULL,
+  generated_at INTEGER NOT NULL,
+  PRIMARY KEY (hoot_id, date)
+)`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS outbound_log (
+  id TEXT PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  dest TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  bytes INTEGER NOT NULL
+)`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS queued_turns (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id),
+  message TEXT NOT NULL,
+  surface TEXT NOT NULL DEFAULT 'web',
+  created_at INTEGER NOT NULL
+)`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS read_state (
+  hoot_id TEXT NOT NULL REFERENCES hoots(id),
+  surface TEXT NOT NULL,
+  last_read_at INTEGER NOT NULL,
+  PRIMARY KEY (hoot_id, surface)
+)`);

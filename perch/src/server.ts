@@ -5,6 +5,8 @@ import { config } from "./config.js";
 import { db, now, uuid } from "./db.js";
 import { startTurn } from "./turns.js";
 import { getPellet, regeneratePellet } from "./pellet.js";
+import { ensureDigest, getDigest } from "./digests.js";
+import { outboundToday } from "./outbound.js";
 import { createAutomation, computeNextFire } from "./scheduler.js";
 import { bus } from "./stream.js";
 import { bindChannel, channelForChat } from "./herald-telegram.js";
@@ -17,7 +19,7 @@ export function buildServer() {
 
   app.addHook("onRequest", async (req, reply) => {
     if (req.url === "/v1/health") return;
-    if (req.url === "/" || req.url.startsWith("/assets/")) return; // UI is same-origin local
+    if (req.url === "/" || req.url.startsWith("/assets/") || req.url.startsWith("/v1/stream")) return; // UI is same-origin local
     const auth = req.headers.authorization;
     if (auth !== `Bearer ${config.authToken}`) {
       return reply.code(401).send({ error: "unauthorized" });
@@ -69,9 +71,12 @@ export function buildServer() {
     const thread = db.prepare("SELECT * FROM threads WHERE id = ?").get(req.params.id) as any;
     if (!thread) return reply.code(404).send({ error: "not found" });
     const message: string | undefined = req.body?.message;
+    const surface: "web" | "telegram" = (req.body?.surface as any) ?? "web";
     try {
-      const turnId = await startTurn({ threadId: thread.id, trigger: message ? "user" : "tool", message: message ?? null });
-      return reply.code(202).send({ turn_id: turnId });
+      const { turnId, queued } = await startTurn({
+        threadId: thread.id, trigger: message ? "user" : "tool", message: message ?? null, surface,
+      });
+      return reply.code(202).send({ turn_id: turnId, queued });
     } catch (err: any) {
       return reply.code(409).send({ error: String(err?.message ?? err) });
     }
@@ -108,6 +113,80 @@ export function buildServer() {
     db.prepare("DELETE FROM automations WHERE id = ?").run(req.params.id);
     return { ok: true };
   });
+
+  // --- presence (board 04B: one line, third person) ---
+  app.get("/v1/hoots/:id/presence", async (req: Post) => {
+    const hoot = db.prepare("SELECT * FROM hoots WHERE id = ?").get(req.params.id) as any;
+    if (!hoot) return { error: "not found" };
+    const lastHeard = db
+      .prepare(
+        `SELECT i.created_at, COALESCE(i.surface, t.origin_surface) AS surface FROM items i
+         JOIN turns t ON t.id = i.turn_id JOIN threads th ON th.id = i.thread_id
+         WHERE th.hoot_id = ? AND i.kind = 'message' AND i.role = 'user'
+         ORDER BY i.created_at DESC LIMIT 1`
+      )
+      .get(req.params.id) as any;
+    const nextFire = db
+      .prepare(`SELECT MIN(next_fire_at) AS n FROM automations WHERE hoot_id = ? AND enabled = 1`)
+      .get(req.params.id) as any;
+    const lastTurn = db
+      .prepare(
+        `SELECT t.status AS status FROM turns t JOIN threads th ON th.id = t.thread_id
+         WHERE th.hoot_id = ? ORDER BY t.started_at DESC LIMIT 1`
+      )
+      .get(req.params.id) as any;
+    const failing = lastTurn?.status === "interrupted";
+    const status = !config.openaiApiKey || !hoot ? "quiet" : failing ? "quiet" : "awake";
+    return {
+      status,
+      lastHeard: lastHeard ? { at: lastHeard.created_at, surface: lastHeard.surface } : null,
+      nextPromise: nextFire?.n ?? null,
+    };
+  });
+
+  // --- per-surface read state (away divider, board 07) ---
+  app.get("/v1/hoots/:id/read", async (req: Post) =>
+    db.prepare(`SELECT surface, last_read_at FROM read_state WHERE hoot_id = ?`).all(req.params.id));
+  app.post("/v1/hoots/:id/read", async (req: Post) => {
+    const { surface = "web" } = req.body ?? {};
+    db.prepare(
+      `INSERT INTO read_state (hoot_id, surface, last_read_at) VALUES (?, ?, ?)
+       ON CONFLICT(hoot_id, surface) DO UPDATE SET last_read_at = excluded.last_read_at`
+    ).run(req.params.id, surface, now());
+    return { ok: true };
+  });
+
+  // --- day digests (lazy; DECISIONS.md #9) ---
+  app.get("/v1/hoots/:id/digest/:date", async (req: Post) => {
+    const text = await ensureDigest(req.params.id, req.params.date);
+    return { date: req.params.date, digest: text };
+  });
+
+  // --- facts (memory drawer; board 04B right panel) ---
+  app.get("/v1/hoots/:id/facts", async (req: Post) =>
+    db.prepare(
+      `SELECT f.*, i.thread_id AS source_thread_id
+       FROM facts f LEFT JOIN items i ON i.id = f.source_item_id
+       WHERE f.hoot_id = ? AND f.forgotten_at IS NULL ORDER BY f.created_at DESC`
+    ).all(req.params.id));
+  app.patch("/v1/facts/:id", async (req: Post, reply: Reply) => {
+    const f = db.prepare(`SELECT * FROM facts WHERE id = ?`).get(req.params.id) as any;
+    if (!f) return reply.code(404).send({ error: "not found" });
+    const { text, confidence } = req.body ?? {};
+    db.prepare(`UPDATE facts SET text = COALESCE(?, text), confidence = COALESCE(?, confidence) WHERE id = ?`)
+      .run(text ?? null, confidence ?? null, f.id);
+    bus.publish({ event: "fact.changed", data: { fact_id: f.id, hoot_id: f.hoot_id } });
+    return db.prepare(`SELECT * FROM facts WHERE id = ?`).get(f.id);
+  });
+  app.delete("/v1/facts/:id", async (req: Post) => {
+    db.prepare(`UPDATE facts SET forgotten_at = ? WHERE id = ?`).run(now(), req.params.id);
+    bus.publish({ event: "fact.changed", data: { fact_id: req.params.id } });
+    return { ok: true };
+  });
+
+  // --- outbound ledger (DECISIONS.md #5) ---
+  app.get("/v1/outbound/today", async () => ({ ...outboundToday(), rows: db
+    .prepare(`SELECT ts, dest, purpose, bytes FROM outbound_log ORDER BY ts DESC LIMIT 50`).all() }));
 
   // --- pellet ---
   app.get("/v1/hoots/:id/pellet", async (req: Post) => getPellet(req.params.id));
@@ -146,7 +225,12 @@ export function buildServer() {
       "cache-control": "no-cache",
       connection: "keep-alive",
     });
-    const listener = (ev: any) => reply.raw.write(`event: ${ev.event}\ndata: ${JSON.stringify(ev.data)}\n\n`);
+    const since = Number(req.query.since ?? 0);
+    for (const ev of bus.since(since)) {
+      reply.raw.write(`id: ${ev.id}\nevent: ${ev.event}\ndata: ${JSON.stringify(ev.data)}\n\n`);
+    }
+    const listener = (ev: any) =>
+      reply.raw.write(`id: ${ev.id}\nevent: ${ev.event}\ndata: ${JSON.stringify(ev.data)}\n\n`);
     bus.on("event", listener);
     const ping = setInterval(() => reply.raw.write(`: ping\n\n`), 15000);
     req.raw.on("close", () => {
