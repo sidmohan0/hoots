@@ -46,6 +46,17 @@ function buildMessages(hoot: any, thread: any, userText: string | null, missNote
   return messages;
 }
 
+// --- presence ---------------------------------------------------------------
+
+// In-memory claim mirror (threadId -> turn). Presence reads this so a turn is
+// "thinking" the instant it is claimed; the DB claim in `turns` stays the
+// durable source and is reconciled on boot.
+const busy = new Map<string, { turnId: string; startedAt: number }>();
+
+export function busyState(): { threadId: string; turnId: string; startedAt: number }[] {
+  return [...busy].map(([threadId, v]) => ({ threadId, ...v }));
+}
+
 // --- turn execution ---------------------------------------------------------
 
 // DB-level claim: turns are serial per thread, and the claim lives in the turns
@@ -73,6 +84,7 @@ export function releaseTurn(
   db.prepare(
     `UPDATE turns SET status = ?, error = ?, completed_at = ? WHERE id = ? AND thread_id = ? AND status = 'in_progress'`
   ).run(status, error, now(), turnId, threadId);
+  if (busy.get(threadId)?.turnId === turnId || !busy.has(threadId)) busy.delete(threadId);
 }
 
 /** On boot: any turn left in_progress by a crash/restart becomes interrupted. */
@@ -100,7 +112,9 @@ export async function startTurn(opts: {
 
   const turnId = uuid();
   try {
-    claimTurn.immediate(thread.id, turnId, opts.trigger, now(), opts.surface ?? "web");
+    const startedAt = now();
+    claimTurn.immediate(thread.id, turnId, opts.trigger, startedAt, opts.surface ?? "web");
+    busy.set(thread.id, { turnId, startedAt });
   } catch {
     // Composer never blocks (DECISIONS.md #6): queue it; it starts when the
     // in-flight turn lands.

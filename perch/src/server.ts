@@ -3,7 +3,7 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
 import { db, now, uuid, recordAutomationRun, localDate, localDayBounds } from "./db.js";
-import { startTurn } from "./turns.js";
+import { startTurn, busyState } from "./turns.js";
 import { getPellet, regeneratePellet } from "./pellet.js";
 import { ensureDigest, getDigest } from "./digests.js";
 import { outboundToday } from "./outbound.js";
@@ -157,9 +157,23 @@ export function buildServer() {
       )
       .get(req.params.id) as any;
     const failing = lastTurn?.status === "interrupted";
-    const status = !config.openaiApiKey || !hoot ? "quiet" : failing ? "quiet" : "awake";
+    // A turn in flight beats every other read: the hoot is thinking right now.
+    const threadIds = new Set(
+      (db.prepare(`SELECT id FROM threads WHERE hoot_id = ?`).all(req.params.id) as any[]).map((t) => t.id)
+    );
+    const live = busyState().find((b) => threadIds.has(b.threadId));
+    const inFlight = live
+      ? { started_at: live.startedAt }
+      : (db
+          .prepare(
+            `SELECT t.started_at FROM turns t JOIN threads th ON th.id = t.thread_id
+             WHERE th.hoot_id = ? AND t.status = 'in_progress' ORDER BY t.started_at DESC LIMIT 1`
+          )
+          .get(req.params.id) as any);
+    const status = inFlight ? "thinking" : !config.openaiApiKey || failing ? "quiet" : "awake";
     return {
       status,
+      busySince: inFlight ? inFlight.started_at : null,
       lastHeard: lastHeard ? { at: lastHeard.created_at, surface: lastHeard.surface } : null,
       nextPromise: nextFire?.n ?? null,
     };
