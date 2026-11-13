@@ -354,3 +354,4 @@ button { font-family: var(--font-family-body); cursor: pointer; }
 }
 
 @media (min-width: 1280px) { .machine .mem-toggle { display: none; } }
+.linky { background: none; border: none; padding: 0; color: var(--c-accent-text); text-decoration: underline; font-size: inherit; }

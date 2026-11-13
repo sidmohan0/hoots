@@ -56,12 +56,16 @@ export function buildServer() {
   app.patch("/v1/hoots/:id", async (req: Post, reply: Reply) => {
     const h = db.prepare("SELECT * FROM hoots WHERE id = ?").get(req.params.id) as any;
     if (!h) return reply.code(404).send({ error: "not found" });
-    const { name, system_prompt, model_name, model_params, status } = req.body ?? {};
+    const { name, system_prompt, model_name, model_params, status, api_key_env, model_base_url } = req.body ?? {};
+    if (api_key_env && !process.env[api_key_env]) {
+      return reply.code(400).send({ error: `env ${api_key_env} is not set on the perch` });
+    }
     db.prepare(
-      `UPDATE hoots SET name=?, system_prompt=?, model_name=?, model_params=?, status=? WHERE id=?`
+      `UPDATE hoots SET name=?, system_prompt=?, model_name=?, model_params=?, status=?, api_key_env=?, model_base_url=? WHERE id=?`
     ).run(
       name ?? h.name, system_prompt ?? h.system_prompt, model_name ?? h.model_name,
-      model_params ? JSON.stringify(model_params) : h.model_params, status ?? h.status, h.id
+      model_params ? JSON.stringify(model_params) : h.model_params, status ?? h.status,
+      api_key_env ?? h.api_key_env, model_base_url ?? h.model_base_url, h.id
     );
     bus.publish({ event: "hoot.updated", data: { hoot_id: h.id } });
     return db.prepare("SELECT * FROM hoots WHERE id = ?").get(h.id);

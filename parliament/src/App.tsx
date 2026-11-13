@@ -513,7 +513,7 @@ function Items({
   focusDay: string | null;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [digests, setDigests] = useState<Record<string, string>>({});
+  const [digests, setDigests] = useState<Record<string, string | null>>({});
 
   // arriving via ⌘K with ?day= — open it and put it in view
   useEffect(() => {
@@ -547,7 +547,7 @@ function Items({
   let awayShown = false;
 
   return (
-    <div className="days">
+    <div className="days" role="log" aria-live="polite" aria-relevant="additions">
       {days.map(([k, dayItems]) => {
         const isToday = k === todayKey;
         const open = isToday || !!expanded[k];
@@ -556,7 +556,12 @@ function Items({
           <section className="day" key={k} data-date={k}>
             <header className="day-head-row" onClick={() => !isToday && expandDay(k)}>
               <h2 className="day-head">{dayLabel(dayItems[0].created_at)}</h2>
-              {!isToday && !open && <p className="day-digest">{digest ?? "· · ·"}</p>}
+              {!isToday && !open && (
+                digest === undefined ? <p className="day-digest">· · ·</p>
+                : digest === "" ? <p className="day-digest muted">quiet day</p>
+                : digest === null ? <p className="day-digest muted">digest unavailable · <button className="linky" onClick={(e) => { e.stopPropagation(); setDigests((g) => { const n = { ...g }; delete n[k]; return n; }); }}>retry</button></p>
+                : <p className="day-digest">{digest}</p>
+              )}
             </header>
             {(open || isToday) && (
               <div className="day-items">
@@ -778,10 +783,27 @@ function Composer({
 
 // --- drawers ------------------------------------------------------------------
 function Drawer({ side, open, persistOnWide, onClose, label, children }: any) {
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const el = ref.current;
+    el?.querySelector<HTMLElement>("button, [href], input, textarea, select")?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      if (e.key !== "Tab" || !el) return;
+      const f = [...el.querySelectorAll<HTMLElement>("button, [href], input, textarea, select")].filter((n) => !n.hasAttribute("disabled"));
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
   if (!open && !persistOnWide) return null;
   const hidden = persistOnWide && !open ? " drawer-collapsed" : "";
   return (
-    <aside className={`drawer drawer-${side}${hidden}`} role="dialog" aria-label={label}>
+    <aside ref={ref} className={`drawer drawer-${side}${hidden}`} role="dialog" aria-modal={open || undefined} aria-label={label}>
       <header className="drawer-head">
         <h3>{label}</h3>
         <button className="ghost" onClick={onClose}>

@@ -57,6 +57,6 @@ export async function ensureDigest(hootId: string, date: string): Promise<string
     db.prepare(`INSERT INTO day_digests (hoot_id, date, text, generated_at) VALUES (?, ?, ?, ?)`).run(hootId, date, text, now());
     return text;
   } catch {
-    return null; // no digest yet; the UI shows the raw day instead
+    return null; // model failed — the UI offers a retry
   }
 }
