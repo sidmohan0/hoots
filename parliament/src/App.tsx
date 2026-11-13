@@ -4,11 +4,14 @@ import { dayKey, dayLabel, timeOf, useElapsed, useStream } from "./hooks";
 import { Glyph, type PresenceState } from "./Glyph";
 import { Markdown } from "./markdown";
 import { Toaster, toast } from "./toast";
+import { Command } from "./Command";
+import { EmptyBough, NewHoot } from "./Onboarding";
+import { Settings } from "./Settings";
+import { applyStoredTheme, COMPOSE_EVENT, goHoot, navigate, readRoute, useRoute } from "./nav";
+import "./nav.css";
 
 // Parliament v0.2 — boards 03 (IA), 04B (v1 base), 07 (interaction notes).
-// One view (the hoot), two drawers, machine footer. ⌘K palette lands next.
-
-const urlHoot = new URLSearchParams(location.search).get("hoot") ?? "";
+// One view (the hoot), two drawers, machine footer. URL is the router (nav.ts).
 
 type Live = {
   items: Item[];
@@ -28,6 +31,7 @@ const reducedMotion = () =>
   typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 export function App() {
+  const route = useRoute();
   const [hoots, setHoots] = useState<any[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [presence, setPresence] = useState<Presence | null>(null);
@@ -36,26 +40,37 @@ export function App() {
   const [outbound, setOutbound] = useState<{ count: number; bytes: number } | null>(null);
   const [facts, setFacts] = useState<Fact[]>([]);
   const [automations, setAutomations] = useState<Automation[]>([]);
-  const [drawer, setDrawer] = useState<"memory" | "promises" | null>(() => {
-    const d = new URLSearchParams(location.search).get("d");
-    return d === "memory" || d === "promises" ? d : null;
-  });
+  const drawer = route.drawer;
+  const setDrawer = (d: "memory" | "promises" | null) => navigate({ d });
+  const [newHoot, setNewHoot] = useState(false);
+  const [settings, setSettings] = useState(false);
   const [away, setAway] = useState<{ count: number; since: number } | null>(null);
   const [webRead, setWebRead] = useState<number>(() => Date.now() - 7 * 86_400_000);
   const boughRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLInputElement>(null);
   const [boughId, setBoughId] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending[]>([]);
   const [replies, setReplies] = useState(0);
   const atBottom = useRef(true);
   const itemsRef = useRef<Item[]>([]);
   itemsRef.current = items;
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    applyStoredTheme();
+  }, []);
 
   // --- load hoots + pick active ---
   useEffect(() => {
     (async () => {
       const hs = await api.hoots();
       setHoots(hs);
-      const active = hs.find((h) => h.id === urlHoot) ?? hs[0];
+      const stored = localStorage.getItem("hootId");
+      const active = hs.find((h) => h.id === route.hoot) ?? hs.find((h) => h.id === stored) ?? hs[0];
+      setItems([]);
+      setAway(null);
+      setBoughId(null);
+      setLoaded(false);
       if (active) {
         localStorage.setItem("hootId", active.id);
         const threads = await api.threads(active.id);
@@ -63,7 +78,7 @@ export function App() {
         setBoughId(bough?.id ?? null);
       }
     })().catch(() => {});
-  }, []);
+  }, [route.hoot]);
 
   // --- load bough items ---
   useEffect(() => {
@@ -71,6 +86,7 @@ export function App() {
     (async () => {
       const rows = await api.items(boughId);
       setItems(rows);
+      setLoaded(true);
       // away divider: unread-on-web telegram items (board 07)
       try {
         const rs = await api.readState(hootId());
@@ -107,6 +123,45 @@ export function App() {
     api.automations(hootId()).then(setAutomations).catch(() => {});
   };
   useEffect(loadFacts, [hootId()]);
+
+  // --- keyboard map: / composer · M memory · P promises · [ ] days · 1–9 hoots
+  const dayKeys = useMemo(() => [...new Set(items.map((i) => dayKey(i.created_at)))].sort(), [items]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      const typing =
+        !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
+      if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+      const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      if (k === "/") {
+        e.preventDefault();
+        composerRef.current?.focus();
+        return;
+      }
+      if (k === "m") {
+        setDrawer(drawer === "memory" ? null : "memory");
+        return;
+      }
+      if (k === "p") {
+        setDrawer(drawer === "promises" ? null : "promises");
+        return;
+      }
+      if (k === "[" || k === "]") {
+        if (!dayKeys.length) return;
+        const at = route.day ? dayKeys.indexOf(route.day) : dayKeys.length - 1;
+        const from = at < 0 ? dayKeys.length - 1 : at;
+        const next = dayKeys[Math.min(dayKeys.length - 1, Math.max(0, from + (k === "[" ? -1 : 1)))];
+        if (next) navigate({ day: next });
+        return;
+      }
+      if (/^[1-9]$/.test(k)) {
+        const target = hoots[Number(k) - 1];
+        if (target) goHoot(target.id);
+      }
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [dayKeys, drawer, hoots, route.day]);
 
   // --- SSE ---
   const stream = useStream((ev) => {
@@ -219,21 +274,19 @@ export function App() {
             key={h.id}
             className={"rail-hoot" + (h.id === hootId() ? " active" : "")}
             title={h.name}
-            onClick={() => {
-              localStorage.setItem("hootId", h.id);
-              location.href = `/?hoot=${h.id}`;
-            }}
+            onClick={() => goHoot(h.id)}
           >
             <span className="monogram">{h.name.slice(0, 1)}</span>
           </button>
         ))}
-        <button className="rail-new" title="New hoot" onClick={() => alert("New hoot flow lands with the onboarding pass")}>
+        <button className="rail-new" title="New hoot" onClick={() => setNewHoot(true)}>
           +
         </button>
       </nav>
 
       <main className="bough" ref={boughRef} onScroll={onBoughScroll}>
         <PresenceHeader name={hootName} state={state} presence={presence} thinking={thinking} />
+        {loaded && !items.length && !thinking && <EmptyBough onConnectTelegram={() => setSettings(true)} />}
         <Items
           items={items}
           thinking={thinking}
@@ -243,8 +296,9 @@ export function App() {
           away={away}
           webRead={webRead}
           boughRef={boughRef}
+          focusDay={route.day}
         />
-        <Composer onSend={send} busy={!!thinking} />
+        <Composer onSend={send} busy={!!thinking} inputRef={composerRef} />
       </main>
 
       {replies > 0 && (
@@ -254,7 +308,7 @@ export function App() {
       )}
 
       <Drawer side="right" open={drawer === "memory"} onClose={() => setDrawer(null)} label="Memory">
-        <Memory facts={facts} hootName={hootName} onConfirm={(id) => factAction(() => api.confirmFact(id))} onForget={(id) => factAction(() => api.forgetFact(id))} onEdit={(id, text) => factAction(() => api.editFact(id, text))} />
+        <Memory facts={facts} hootName={hootName} highlight={route.fact} onConfirm={(id) => factAction(() => api.confirmFact(id))} onForget={(id) => factAction(() => api.forgetFact(id))} onEdit={(id, text) => factAction(() => api.editFact(id, text))} />
       </Drawer>
       <Drawer side="right" open={drawer === "promises"} onClose={() => setDrawer(null)} label="Promises">
         <Promises automations={automations} hootId={hootId()} onToggle={(id, enabled) => factAction(() => api.patchAutomation(id, { enabled }))} />
@@ -266,6 +320,9 @@ export function App() {
         </button>
         <button className={drawer === "promises" ? "on" : ""} onClick={() => setDrawer(drawer === "promises" ? null : "promises")}>
           promises
+        </button>
+        <button className={settings ? "on" : ""} onClick={() => setSettings(true)}>
+          settings
         </button>
         <span className="spacer" />
         <span className={`conn-dot ${stream.status}`} aria-hidden />
@@ -285,6 +342,23 @@ export function App() {
         </span>
       </footer>
       <Toaster />
+
+      <Command hoots={hoots} onClose={() => {}} />
+      <NewHoot
+        open={newHoot}
+        onClose={() => setNewHoot(false)}
+        onCreated={(h) => {
+          setNewHoot(false);
+          setHoots((prev) => [...prev, h]);
+          goHoot(h.id);
+        }}
+      />
+      <Settings
+        open={settings}
+        hoot={hoots.find((h) => h.id === hootId()) ?? null}
+        onClose={() => setSettings(false)}
+        onSaved={(next) => setHoots((prev) => prev.map((h) => (h.id === next.id ? { ...h, ...next } : h)))}
+      />
     </div>
   );
 }
@@ -299,7 +373,7 @@ function textOf(item: Item): string {
 }
 
 function hootId(): string {
-  return urlHoot || localStorage.getItem("hootId") || "";
+  return readRoute().hoot || localStorage.getItem("hootId") || "";
 }
 
 // --- presence header (board 04B, voice rule: chrome is third person) ---------
@@ -337,6 +411,7 @@ function Items({
   away,
   webRead,
   boughRef,
+  focusDay,
 }: {
   items: Item[];
   thinking: { turnId: string; startedAt: number } | null;
@@ -346,9 +421,20 @@ function Items({
   away: { count: number; since: number } | null;
   webRead: number;
   boughRef: React.RefObject<HTMLDivElement | null>;
+  focusDay: string | null;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [digests, setDigests] = useState<Record<string, string>>({});
+
+  // arriving via ⌘K with ?day= — open it and put it in view
+  useEffect(() => {
+    if (!focusDay) return;
+    setExpanded((e) => ({ ...e, [focusDay]: true }));
+    const t = setTimeout(() => {
+      document.querySelector(`[data-date="${focusDay}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }, 40);
+    return () => clearTimeout(t);
+  }, [focusDay, items.length]);
 
   const days = useMemo(() => {
     const map = new Map<string, Item[]>();
@@ -559,8 +645,25 @@ function ThinkingCard({ startedAt }: { startedAt: number }) {
   );
 }
 
-function Composer({ onSend, busy }: { onSend: (text: string) => void; busy: boolean }) {
+function Composer({
+  onSend,
+  busy,
+  inputRef,
+}: {
+  onSend: (text: string) => void;
+  busy: boolean;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+}) {
   const [text, setText] = useState("");
+  // empty-state chips fill the composer instead of sending
+  useEffect(() => {
+    const fill = (e: Event) => {
+      setText((e as CustomEvent<string>).detail);
+      inputRef.current?.focus();
+    };
+    addEventListener(COMPOSE_EVENT, fill);
+    return () => removeEventListener(COMPOSE_EVENT, fill);
+  }, [inputRef]);
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const t = text.trim();
@@ -571,6 +674,7 @@ function Composer({ onSend, busy }: { onSend: (text: string) => void; busy: bool
   return (
     <form className="composer" onSubmit={submit}>
       <input
+        ref={inputRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder={busy ? "Add while it thinks — queued next" : "Tell Juniper anything…"}
@@ -602,17 +706,23 @@ function Drawer({ side, open, onClose, label, children }: any) {
 function Memory({
   facts,
   hootName,
+  highlight,
   onConfirm,
   onForget,
   onEdit,
 }: {
   facts: Fact[];
   hootName: string;
+  highlight: string | null;
   onConfirm: (id: string) => void;
   onForget: (id: string) => void;
   onEdit: (id: string, text: string) => void;
 }) {
   const [summary, setSummary] = useState("");
+  useEffect(() => {
+    if (!highlight) return;
+    document.getElementById(`fact-${highlight}`)?.scrollIntoView({ block: "center" });
+  }, [highlight, facts.length]);
   useEffect(() => {
     const h = localStorage.getItem("hootId") ?? "";
     api.pellet(h).then((p) => setSummary(p.summary ?? "")).catch(() => {});
@@ -630,7 +740,7 @@ function Memory({
       <p className="label">FACTS · {facts.length}</p>
       <ul className="facts">
         {facts.map((f) => (
-          <li key={f.id} className={`fact ${f.confidence === "extracted" ? "guess" : ""}`}>
+          <li id={`fact-${f.id}`} key={f.id} className={`fact ${f.confidence === "extracted" ? "guess" : ""}${highlight === f.id ? " hl" : ""}`}>
             {editing === f.id ? (
               <input
                 value={draft}
