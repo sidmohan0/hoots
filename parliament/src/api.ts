@@ -11,7 +11,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${token()}`,
-      ...(init?.headers ?? {}),
+      ...init?.headers,
     },
   });
   if (!res.ok) throw new Error(`${init?.method ?? "GET"} ${path} → ${res.status}`);

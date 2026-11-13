@@ -16,12 +16,6 @@ import "./nav.css";
 // Parliament v0.2 — boards 03 (IA), 04B (v1 base), 07 (interaction notes).
 // One view (the hoot), two drawers, machine footer. URL is the router (nav.ts).
 
-type Live = {
-  items: Item[];
-  turnState: Record<string, { status: string; startedAt: number }>;
-  queued: { text: string; at: number }[];
-};
-
 // A locally-held user item that the server hasn't echoed yet.
 type Pending = { tid: string; text: string; at: number; status: "sending" | "failed"; turnId?: string };
 
@@ -639,7 +633,7 @@ function PresenceHeader({ name, state, presence, thinking, runs, compact }: any)
         <h1 className="hero">{hero}</h1>
         <p className="chrome-line">
           {lastHeard ?? "no messages yet"}
-          {next && !thinking ? ` · next check-in ${next}` : ""}
+          {thinking ? ` · thinking ${elapsed}` : next ? ` · next check-in ${next}` : ""}
           {runs.length > 0 && <span className="kept-counter"> · {sent} sent · {missed} missed</span>}
         </p>
       </div>

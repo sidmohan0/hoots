@@ -49,7 +49,7 @@ export async function runTurn(
       model: model.model,
       messages: convo,
       ...(openaiTools.length ? { tools: openaiTools } : {}),
-      ...(model.params ?? {}),
+      ...model.params,
     });
     const msg = res.choices[0].message;
     convo.push(msg as ChatCompletionMessageParam);
