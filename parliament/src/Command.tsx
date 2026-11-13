@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api, type Fact, type Item } from "./api";
 import { dayKey, dayLabel } from "./hooks";
-import { goDay, goHoot, openFact } from "./nav";
+import { goDay, goHoot, goTopic, openFact } from "./nav";
 import "./nav.css";
 
 // ⌘K — one overlay: hoots, days, facts, topics (DECISIONS #3).
@@ -53,6 +53,7 @@ export function Command({
   const [sel, setSel] = useState(0);
   const [days, setDays] = useState<Row[]>([]);
   const [facts, setFacts] = useState<Row[]>([]);
+  const [topicRows, setTopicRows] = useState<Row[]>([]);
   const dialogRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const restoreTo = useRef<HTMLElement | null>(null);
@@ -116,6 +117,44 @@ export function Command({
     };
   }, [open, hoots]);
 
+  // Topics are searched on the perch, not derived from the fact list: three
+  // characters in, ask each hoot what it keeps talking about.
+  useEffect(() => {
+    if (!open) return;
+    const needle = q.trim();
+    if (needle.length < 3) {
+      setTopicRows([]);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      Promise.all(
+        hoots.map(async (h) => {
+          try {
+            const ts = await api.topics(h.id, needle);
+            return ts.map<Row>((x) => ({
+              key: `t:${h.id}:${x.topic}`,
+              kind: "topic",
+              hoot: h.id,
+              label: x.topic,
+              sub: `${h.name} · ${x.count}`,
+            }));
+          } catch {
+            return [] as Row[];
+          }
+        })
+      )
+        .then((all) => {
+          if (!cancelled) setTopicRows(([] as Row[]).concat(...all));
+        })
+        .catch(() => {});
+    }, 150);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [q, open, hoots]);
+
   // Restore focus on close.
   useEffect(() => {
     if (!open) {
@@ -132,15 +171,16 @@ export function Command({
       label: h.name,
       sub: h.status === "paused" ? "paused" : h.model_name ?? undefined,
     }));
-    const topicRows = topicsOf(facts);
+    const topicRowsOut =
+      q.trim().length >= 3 ? filter(topicRows, q) : topicsOf(facts);
     const sectionsOut: Section[] = [
       { name: "HOOTS", rows: filter(hootRows, q) },
       { name: "DAYS", rows: filter(days, q) },
       { name: "FACTS", rows: filter(facts, q) },
-      { name: "TOPICS", rows: filter(topicRows, q) },
+      { name: "TOPICS", rows: topicRowsOut },
     ];
     return sectionsOut.filter((s) => s.rows.length > 0);
-  }, [hoots, days, facts, q]);
+  }, [hoots, days, facts, q, topicRows]);
 
   const flat = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
 
@@ -157,7 +197,7 @@ export function Command({
     if (row.kind === "hoot") goHoot(row.hoot);
     else if (row.kind === "day") goDay(row.hoot, row.date ?? null);
     else if (row.kind === "fact") openFact(row.hoot, row.key.slice(2));
-    else if (row.kind === "topic") goDay(row.hoot, null);
+    else if (row.kind === "topic") goTopic(row.hoot, row.label);
     close();
   };
 
@@ -245,6 +285,7 @@ export function Command({
                     </span>
                     {row.kind === "day" && <span className="cmdk-kind">day</span>}
                     {row.kind === "fact" && <span className="cmdk-kind">fact</span>}
+                    {row.kind === "topic" && <span className="cmdk-kind">topic</span>}
                   </button>
                 );
               })}
@@ -271,7 +312,7 @@ function filter(rows: Row[], q: string): Row[] {
     .map((x) => x.r);
 }
 
-/** Topics are fact categories today; the pellet gets real topics later. */
+/** Topic suggestions before three characters: fact categories are the stand-in. */
 function topicsOf(facts: Row[]): Row[] {
   const seen = new Map<string, Row>();
   for (const f of facts) {

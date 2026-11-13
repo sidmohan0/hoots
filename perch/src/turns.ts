@@ -31,6 +31,11 @@ export function invalidateDigestIfPast(hootId: string, createdAt: number) {
 const MISS_NOTE =
   "You were late because the machine was asleep; open with one short apology, then continue.";
 
+// A hunt's framing: the goal is stated once, in the system block, and the turn
+// is expected to end with a summary instead of trailing off.
+const huntLine = (goal: string | null) =>
+  `This is a hunt: ${goal ?? ""}. Work it to completion, then summarise in one short message.`;
+
 function buildMessages(hoot: any, thread: any, userText: string | null, missNote = false) {
   const history = db
     .prepare(
@@ -45,6 +50,7 @@ function buildMessages(hoot: any, thread: any, userText: string | null, missNote
   const systemParts = [hoot.system_prompt];
   const memory = pelletContextBlock(hoot.id);
   if (memory) systemParts.push(memory);
+  if (thread.kind === "hunt") systemParts.push(huntLine(thread.goal));
   if (missNote) systemParts.push(MISS_NOTE);
   messages.push({ role: "system", content: systemParts.join("\n\n") });
   for (const h of history) {
@@ -53,6 +59,32 @@ function buildMessages(hoot: any, thread: any, userText: string | null, missNote
   }
   if (userText != null) messages.push({ role: "user", content: userText });
   return messages;
+}
+
+// --- hunts ------------------------------------------------------------------
+
+const HUNT_TITLE_CHARS = 80;
+
+/** Create a hunt thread for `goal`. Empty/falsey goal is the caller's problem. */
+export function createHunt(hootId: string, goal: string): string {
+  const id = uuid();
+  const title = goal.length > HUNT_TITLE_CHARS ? `${goal.slice(0, HUNT_TITLE_CHARS - 1).trimEnd()}…` : goal;
+  const at = now();
+  db.prepare(
+    `INSERT INTO threads (id, hoot_id, kind, title, status, goal, created_at, updated_at)
+     VALUES (?, ?, 'hunt', ?, 'open', ?, ?, ?)`
+  ).run(id, hootId, title, goal, at, at);
+  bus.publish({ event: "thread.created", data: { thread_id: id, hoot_id: hootId, kind: "hunt", goal, title } });
+  return id;
+}
+
+// A hunt closes when the turn that worked it lands. Only an open hunt closes;
+// a re-run on an already-complete hunt leaves its status alone.
+function completeHuntIfOpen(thread: any) {
+  if (thread.kind !== "hunt") return;
+  const res = db.prepare(`UPDATE threads SET status = 'complete', updated_at = ? WHERE id = ? AND status = 'open'`)
+    .run(now(), thread.id);
+  if (res.changes) bus.publish({ event: "thread.updated", data: { thread_id: thread.id, status: "complete" } });
 }
 
 // --- presence ---------------------------------------------------------------
@@ -211,6 +243,7 @@ async function executeTurn(turnId: string, hoot: any, thread: any, missNote = fa
 
   releaseTurn(thread.id, turnId, "completed");
   db.prepare(`UPDATE threads SET updated_at=? WHERE id=?`).run(now(), thread.id);
+  completeHuntIfOpen(thread);
   bus.publish({ event: "turn.status", data: { turn_id: turnId, status: "completed" } });
 
   // Best-effort webhook; nothing about the turn waits on it.

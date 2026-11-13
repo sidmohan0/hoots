@@ -61,6 +61,11 @@ export function App() {
   const [proposing, setProposing] = useState(false);
   const [proposalText, setProposalText] = useState("");
   const [runs, setRuns] = useState<any[]>([]);
+  // hunts are never pages: their turns render inline in the bough under a
+  // header row, keyed by thread. Hunt goals come from the thread list.
+  const [hunts, setHunts] = useState<Record<string, { id: string; goal: string | null }>>({});
+  const huntThreads = useRef<{ id: string; goal: string | null }[]>([]);
+  const [globalFacts, setGlobalFacts] = useState<Fact[]>([]);
 
   useEffect(() => {
     applyStoredTheme();
@@ -81,16 +86,23 @@ export function App() {
         localStorage.setItem("hootId", active.id);
         const threads = await api.threads(active.id);
         const bough = threads.find((t) => t.kind === "bough");
+        const mine = threads.filter((t) => t.kind === "hunt").map((t) => ({ id: t.id, goal: t.goal ?? null }));
+        huntThreads.current = mine;
+        setHunts(Object.fromEntries(mine.map((h) => [h.id, h])));
         setBoughId(bough?.id ?? null);
       }
     })().catch(() => {});
   }, [route.hoot]);
 
-  // --- load bough items ---
+  // --- load bough items (plus every hunt's items — hunts render in the bough) ---
   useEffect(() => {
     if (!boughId) return;
     (async () => {
-      const rows = await api.items(boughId);
+      const sets = await Promise.all([
+        api.items(boughId),
+        ...huntThreads.current.map((h) => api.items(h.id).catch(() => [] as Item[])),
+      ]);
+      const rows: Item[] = ([] as Item[]).concat(...sets).sort((a, b) => a.created_at - b.created_at);
       setItems(rows);
       setLoaded(true);
       // away divider: unread-on-web telegram items (board 07)
@@ -126,6 +138,7 @@ export function App() {
   const loadFacts = () => {
     if (!hootId()) return;
     api.facts(hootId()).then(setFacts).catch(() => {});
+    api.globalFacts().then(setGlobalFacts).catch(() => {});
     api.automations(hootId()).then(setAutomations).catch(() => {});
   };
   useEffect(loadFacts, [hootId()]);
@@ -220,6 +233,16 @@ export function App() {
       }
     }
     if (ev.event === "fact.changed") loadFacts();
+    if (ev.event === "thread.created") {
+      // A hunt was spawned mid-session: name it up front so its turns can carry
+      // the header row (items themselves arrive as normal item.append events).
+      const d = ev.data as any;
+      if (d.kind === "hunt" && d.thread_id) {
+        const entry = { id: String(d.thread_id), goal: (d.goal as string) ?? null };
+        huntThreads.current = [...huntThreads.current, entry];
+        setHunts((h) => ({ ...h, [entry.id]: entry }));
+      }
+    }
     if (ev.event === "automation.fired") {
       api.automations(hootId()).then(setAutomations).catch(() => {});
       loadRuns();
@@ -336,6 +359,12 @@ export function App() {
   };
 
   const hootName = hoots.find((h) => h.id === hootId())?.name ?? "Hoot";
+  // Topic filter (⌘K TOPICS): client-side over the loaded bough, never a page.
+  const topic = route.topic;
+  const shownItems = useMemo(
+    () => (topic ? items.filter((it) => topicMatch(it, topic)) : items),
+    [items, topic]
+  );
   const state: PresenceState =
     thinking ? "thinking" : stream.status === "quiet" ? "quiet" : (presence?.status as PresenceState) ?? "awake";
 
@@ -368,8 +397,18 @@ export function App() {
             else navigate({ day: k });
           }}
         />
+        {topic && (
+          <div className="topic-chip">
+            <span className="topic-chip-label">topic · {topic}</span>
+            <button onClick={() => navigate({ topic: null })} aria-label="Clear topic filter">
+              ×
+            </button>
+          </div>
+        )}
         <Items
-          items={items}
+          items={shownItems}
+          hunts={hunts}
+          topic={topic}
           thinking={thinking}
           queued={queued}
           pending={pending}
@@ -403,7 +442,17 @@ export function App() {
       )}
 
       <Drawer side="right" persistOnWide open={drawer === "memory"} onClose={() => setDrawer(null)} label="Memory">
-        <Memory facts={facts} hootName={hootName} highlight={route.fact} onJump={jumpToItem} onConfirm={(id) => factAction(() => api.confirmFact(id))} onForget={(id) => factAction(() => api.forgetFact(id))} onEdit={(id, text) => factAction(() => api.editFact(id, text))} />
+        <Memory
+          facts={facts}
+          globalFacts={globalFacts}
+          hootName={hootName}
+          highlight={route.fact}
+          onJump={jumpToItem}
+          onConfirm={(id) => factAction(() => api.confirmFact(id))}
+          onForget={(id) => factAction(() => api.forgetFact(id))}
+          onEdit={(id, text) => factAction(() => api.editFact(id, text))}
+          onScope={(id, scope) => factAction(() => api.patchFactScope(id, scope))}
+        />
       </Drawer>
       <Drawer side="right" open={drawer === "promises"} onClose={() => setDrawer(null)} label="Promises">
         <Promises automations={automations} hootId={hootId()} runs={runs} onToggle={(id, enabled) => factAction(() => api.patchAutomation(id, { enabled }))} />
@@ -471,6 +520,51 @@ function hootId(): string {
   return readRoute().hoot || localStorage.getItem("hootId") || "";
 }
 
+/** Client-side topic filter over already-loaded items (?topic=). */
+function topicMatch(item: Item, topic: string): boolean {
+  const needle = topic.toLowerCase();
+  let text = "";
+  try {
+    text = String(JSON.parse(item.content)?.text ?? "");
+  } catch {
+    text = String(item.content ?? "");
+  }
+  return text.toLowerCase().includes(needle);
+}
+
+/**
+ * Wrap case-insensitive matches of `q` in <mark> inside every text node of
+ * `root`. Re-runnable: clears its own marks (and re-normalises) first.
+ */
+function highlightIn(root: HTMLElement, q: string | null) {
+  root.querySelectorAll("mark.hl").forEach((m) => m.replaceWith(document.createTextNode(m.textContent ?? "")));
+  root.normalize();
+  const needle = (q ?? "").toLowerCase();
+  if (!needle) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes: Text[] = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode as Text);
+  for (const node of nodes) {
+    const text = node.data;
+    const lower = text.toLowerCase();
+    if (!lower.includes(needle)) continue;
+    const frag = document.createDocumentFragment();
+    let from = 0;
+    let at = lower.indexOf(needle);
+    while (at >= 0) {
+      frag.append(text.slice(from, at));
+      const mark = document.createElement("mark");
+      mark.className = "hl";
+      mark.textContent = text.slice(at, at + needle.length);
+      frag.append(mark);
+      from = at + needle.length;
+      at = lower.indexOf(needle, from);
+    }
+    frag.append(text.slice(from));
+    node.replaceWith(frag);
+  }
+}
+
 // --- presence header (board 04B, voice rule: chrome is third person) ---------
 function PresenceHeader({ name, state, presence, thinking, runs }: any) {
   const sent = runs.filter((r: any) => r.outcome === "sent").length;
@@ -502,6 +596,8 @@ function PresenceHeader({ name, state, presence, thinking, runs }: any) {
 
 function Items({
   items,
+  hunts,
+  topic,
   thinking,
   queued,
   pending,
@@ -512,6 +608,8 @@ function Items({
   focusDay,
 }: {
   items: Item[];
+  hunts: Record<string, { id: string; goal: string | null }>;
+  topic: string | null;
   thinking: { turnId: string; startedAt: number } | null;
   queued: { text: string; at: number }[];
   pending: Pending[];
@@ -581,7 +679,12 @@ function Items({
                     (
                       <AwayDivider away={away} boughRef={boughRef} key={`away-${it.id}`} />
                     ))}
-                    <ItemRow item={it} />
+                    {hunts[it.thread_id] && dayItems[i - 1]?.thread_id !== it.thread_id && (
+                      <p className="hunt-head">
+                        ⌁ hunt · {hunts[it.thread_id].goal ?? "untitled"}
+                      </p>
+                    )}
+                    <ItemRow item={it} topic={topic} />
                     {i === dayItems.length - 1 && thinking && <ThinkingCard startedAt={thinking.startedAt} />}
                   </React.Fragment>
                 ))}
@@ -698,18 +801,26 @@ function PendingRow({ p, onRetry }: { p: Pending; onRetry: () => void }) {
   );
 }
 
-function ItemRow({ item }: { item: Item }) {
+function ItemRow({ item, topic }: { item: Item; topic: string | null }) {
+  const bubbleRef = useRef<HTMLDivElement>(null);
   let c: any = {};
   try {
     c = JSON.parse(item.content);
   } catch {
     c = { text: item.content };
   }
+  // Highlighting mutates the rendered text nodes in place, so it must run after
+  // React commits — and clear its own marks before re-marking.
+  useEffect(() => {
+    if (bubbleRef.current) highlightIn(bubbleRef.current, topic);
+  }, [topic, item.content]);
   if (item.kind === "note") {
     return (
       <div className="noted-chip">
         <span className="noted-label">NOTED</span>
-        <span>{c.fact}</span>
+        <span ref={bubbleRef}>
+          {c.fact}
+        </span>
       </div>
     );
   }
@@ -717,7 +828,7 @@ function ItemRow({ item }: { item: Item }) {
   const mine = item.role === "user";
   return (
     <div className={`item ${mine ? "mine" : "theirs"}`} id={`item-${item.id}`}>
-      <div className="bubble">
+      <div className="bubble" ref={bubbleRef}>
         {mine ? <p className="plain">{String(c.text ?? "")}</p> : <Markdown text={String(c.text ?? "")} />}
       </div>
       <p className="meta">
@@ -826,20 +937,24 @@ function Drawer({ side, open, persistOnWide, onClose, label, children }: any) {
 
 function Memory({
   facts,
+  globalFacts,
   hootName,
   highlight,
   onJump,
   onConfirm,
   onForget,
   onEdit,
+  onScope,
 }: {
   facts: Fact[];
+  globalFacts: Fact[];
   hootName: string;
   highlight: string | null;
   onJump: (itemId: string) => void;
   onConfirm: (id: string) => void;
   onForget: (id: string) => void;
   onEdit: (id: string, text: string) => void;
+  onScope: (id: string, scope: "global" | "hoot") => void;
 }) {
   const [summary, setSummary] = useState("");
   useEffect(() => {
@@ -857,7 +972,9 @@ function Memory({
     const people: Fact[] = [];
     const ongoing: Fact[] = [];
     const weekAgo = Date.now() - 7 * 86_400_000;
+    // Globals live in their own section below, not in this hoot's groups.
     for (const f of facts) {
+      if (f.scope === "global") continue;
       if (f.category === "person") people.push(f);
       else if (f.created_at >= weekAgo) week.push(f);
       else ongoing.push(f);
@@ -915,6 +1032,15 @@ function Memory({
             <div className="fact-actions">
               {f.confidence === "extracted" && <button onClick={() => onConfirm(f.id)}>confirm</button>}
               <button onClick={() => { setEditing(f.id); setDraft(f.text); }}>correct</button>
+              {f.scope !== "global" && (
+                <button
+                  className="fact-everywhere"
+                  title="share with all hoots"
+                  onClick={() => onScope(f.id, "global")}
+                >
+                  everywhere
+                </button>
+              )}
               <button onClick={() => onForget(f.id)}>forget</button>
             </div>
           </li>
@@ -923,6 +1049,25 @@ function Memory({
       </section>
       ))}
       {!facts.length && <p className="small muted">Nothing yet. Everything {hootName} learns shows up here.</p>}
+      <section className="shared-facts">
+        <p className="label">SHARED WITH ALL HOOTS</p>
+        <p className="caption muted">“everywhere” puts a fact in every hoot's context — only you promote one.</p>
+        <ul className="facts">
+          {globalFacts.map((f) => (
+            <li id={`fact-${f.id}`} key={f.id} className={`fact global${highlight === f.id ? " hl" : ""}`}>
+              <p className="fact-text">{f.text}</p>
+              <p className="fact-meta">
+                {f.hoot_name ? `from ${f.hoot_name} · ` : ""}
+                {new Date(f.created_at).toLocaleDateString([], { day: "numeric", month: "short" })}
+              </p>
+              <div className="fact-actions">
+                <button onClick={() => onScope(f.id, "hoot")}>this hoot only</button>
+              </div>
+            </li>
+          ))}
+          {!globalFacts.length && <li className="small muted">Nothing shared yet.</li>}
+        </ul>
+      </section>
     </div>
   );
 }

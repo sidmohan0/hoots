@@ -1,6 +1,9 @@
 import { db, now, uuid } from "./db.js";
 import type { ToolDef } from "./model.js";
 import { pinFact } from "./pellet.js";
+// Cyclic on purpose: turns.ts imports builtInTools() by name, tools.ts calls
+// into turns only at execute time (ESM live bindings make that safe).
+import { createHunt, startTurn } from "./turns.js";
 
 // Full-text recall over the hoot's bough history (messages + pinned notes),
 // backed by the items_fts FTS5 index. Falls back to a plain LIKE scan if FTS
@@ -89,6 +92,29 @@ export function builtInTools(): ToolDef[] {
         ).run(itemId, ctx.turnId, turn.thread_id, ctx.turnId, JSON.stringify({ fact: args.fact }), now());
         pinFact(ctx.hootId, args.fact, itemId);
         return { ok: true };
+      },
+    },
+    {
+      name: "create_hunt",
+      description:
+        "Spawn a hunt: a bounded task thread with one goal that the hoot works to completion on its own. " +
+        "Hunts keep multi-step work out of the bough; the hoot's turns on the hunt show up inline in it. " +
+        "Returns {thread_id}. Use hunts for jobs that need several tool hops, not for quick replies.",
+      parameters: {
+        type: "object",
+        properties: {
+          goal: { type: "string", description: "what the hunt must accomplish, in one sentence" },
+        },
+        required: ["goal"],
+      },
+      execute: async (args: { goal: string }, ctx) => {
+        const goal = String(args.goal ?? "").trim();
+        if (!goal) throw new Error("goal required");
+        const threadId = createHunt(ctx.hootId, goal);
+        // The hunt starts working immediately; the goal is also its first user
+        // message, so the turn is legible in the ledger on its own.
+        await startTurn({ threadId, trigger: "tool", message: goal, surface: "web" });
+        return { thread_id: threadId };
       },
     },
   ];

@@ -2,7 +2,7 @@ import rrulePkg from "rrule";
 // rrule ships CJS without an exports map; destructure via default interop.
 const { RRule } = rrulePkg as any;
 import { db, now, uuid, LATE_GRACE_MS, recordAutomationRun, claimMissNote, getMeta, setMeta, localDate } from "./db.js";
-import { startTurn } from "./turns.js";
+import { createHunt, startTurn } from "./turns.js";
 import { bus } from "./stream.js";
 import { notifyWebhook } from "./outbound.js";
 import { config } from "./config.js";
@@ -122,9 +122,14 @@ export async function tickScheduler(deliverFn?: (hootId: string, text: string) =
     .prepare(`SELECT * FROM automations WHERE enabled = 1 AND next_fire_at IS NOT NULL AND next_fire_at <= ?`)
     .all(now()) as any[];
   for (const a of due) {
-    const thread = db
-      .prepare(`SELECT id FROM threads WHERE hoot_id = ? AND kind = ?`)
-      .get(a.hoot_id, a.thread_kind) as any;
+    // thread_kind decides where the fire lands: the bough, or a fresh hunt
+    // spawned for this fire (a hunt is a bounded task, so each fire gets its own).
+    const thread =
+      a.thread_kind === "hunt"
+        ? ({ id: createHunt(a.hoot_id, a.prompt) } as any)
+        : (db
+            .prepare(`SELECT id FROM threads WHERE hoot_id = ? AND kind = ?`)
+            .get(a.hoot_id, a.thread_kind) as any);
     const scheduledAt: number = a.next_fire_at;
     const firedAt = now();
     if (!thread) {
