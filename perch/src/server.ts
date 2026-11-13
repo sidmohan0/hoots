@@ -71,7 +71,7 @@ export function buildServer() {
     const thread = db.prepare("SELECT * FROM threads WHERE id = ?").get(req.params.id) as any;
     if (!thread) return reply.code(404).send({ error: "not found" });
     const message: string | undefined = req.body?.message;
-    const surface: "web" | "telegram" = (req.body?.surface as any) ?? "web";
+    const surface: "web" | "telegram" | "system" | "silent" = (req.body?.surface as any) ?? "web";
     try {
       const { turnId, queued, queueId } = await startTurn({
         threadId: thread.id, trigger: message ? "user" : "tool", message: message ?? null, surface,

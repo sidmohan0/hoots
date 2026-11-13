@@ -136,8 +136,13 @@ export async function tickScheduler(deliverFn?: (hootId: string, text: string) =
     // apology note per hoot per day is allowed to reach the conversation (#10).
     const missNote = late && claimMissNote(a.hoot_id, firedAt);
     try {
+      // deliver=1 -> 'system' (heralds push it); deliver=0 -> 'silent' (no push).
       const turnId = await startTurn({
-        threadId: thread.id, trigger: "automation", message: a.prompt, missNote,
+        threadId: thread.id,
+        trigger: "automation",
+        message: a.prompt,
+        missNote,
+        surface: a.deliver ? "system" : "silent",
       });
       // The run log is written only once the fire actually happened (#10).
       recordAutomationRun({
