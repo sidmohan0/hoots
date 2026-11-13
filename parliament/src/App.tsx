@@ -10,6 +10,7 @@ import { Command } from "./Command";
 import { EmptyBough, NewHoot } from "./Onboarding";
 import { Settings } from "./Settings";
 import { applyStoredTheme, COMPOSE_EVENT, goHoot, navigate, readRoute, useRoute } from "./nav";
+import { useTabBusy } from "./favicon";
 import "./nav.css";
 
 // Parliament v0.2 — boards 03 (IA), 04B (v1 base), 07 (interaction notes).
@@ -32,6 +33,16 @@ const NEAR_BOTTOM_PX = 400;
 const reducedMotion = () =>
   typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+// One browser notification per reply, and only while the tab is hidden.
+// Permission is asked from the send gesture (never on load); `tag` is the turn
+// id so a replayed SSE event collapses onto the same notification.
+const canNotify = () => typeof Notification !== "undefined" && Notification.permission === "granted";
+
+const askNotifyPermission = () => {
+  if (typeof Notification === "undefined" || Notification.permission !== "default") return;
+  Notification.requestPermission().catch(() => {});
+};
+
 export function App() {
   const route = useRoute();
   const [hoots, setHoots] = useState<any[]>([]);
@@ -53,6 +64,7 @@ export function App() {
   const [boughId, setBoughId] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending[]>([]);
   const [replies, setReplies] = useState(0);
+  const notifiedTurns = useRef<Set<string>>(new Set());
   const atBottom = useRef(true);
   const itemsRef = useRef<Item[]>([]);
   itemsRef.current = items;
@@ -65,6 +77,15 @@ export function App() {
   useEffect(() => {
     applyStoredTheme();
   }, []);
+
+  // tab icon + title follow the turn; back to normal the moment the tab is seen
+  // (moved below `state`, which the icon needs)
+
+  // A past day is folded history — the hero shrinks to give the bough its band.
+  const hasPastDay = useMemo(
+    () => items.some((i) => dayKey(i.created_at) !== dayKey(Date.now())),
+    [items]
+  );
 
   // --- load hoots + pick active ---
   useEffect(() => {
@@ -199,6 +220,7 @@ export function App() {
       }
       if (item.role === "hoot") {
         markRead();
+        notifyReply(item, text);
         // never yank a reader who has scrolled up — show the pill instead
         if (atBottom.current) scrollToBottom();
         else setReplies((n) => n + 1);
@@ -256,8 +278,22 @@ export function App() {
     }
   };
 
+  // Only the reply the user is waiting on is worth a notification; at most one
+  // per turn, so SSE replay and multi-item turns can't stack.
+  const notifyReply = (item: Item, text: string) => {
+    if (!document.hidden || !canNotify() || !text.trim()) return;
+    if (notifiedTurns.current.has(item.turn_id)) return;
+    notifiedTurns.current.add(item.turn_id);
+    const n = new Notification("Juniper", { body: text.slice(0, 120), tag: item.turn_id });
+    n.onclick = () => {
+      window.focus();
+      n.close();
+    };
+  };
+
   const send = (text: string) => {
     if (!boughId) return;
+    askNotifyPermission();
     // A cadence reads as a promise: propose first, schedule on confirm
     // (board 05 — nothing is scheduled until "I promise").
     if (!proposal && looksLikePromise(text)) {
@@ -339,8 +375,20 @@ export function App() {
   const state: PresenceState =
     thinking ? "thinking" : stream.status === "quiet" ? "quiet" : (presence?.status as PresenceState) ?? "awake";
 
+  useTabBusy(!!thinking, state);
+
   return (
-    <div className="shell">
+    <div className={`shell${drawer ? " has-drawer" : ""}`}>
+      <a
+        className="skip-link"
+        href="#composer-input"
+        onClick={(e) => {
+          e.preventDefault();
+          composerRef.current?.focus();
+        }}
+      >
+        skip to composer
+      </a>
       <nav className="rail" aria-label="Parliament">
         {hoots.map((h) => (
           <button
@@ -358,7 +406,14 @@ export function App() {
       </nav>
 
       <main className="bough" ref={boughRef} onScroll={onBoughScroll}>
-        <PresenceHeader name={hootName} state={state} presence={presence} thinking={thinking} runs={runs} />
+        <PresenceHeader
+          name={hootName}
+          state={state}
+          presence={presence}
+          thinking={thinking}
+          runs={runs}
+          compact={hasPastDay}
+        />
         {loaded && !items.length && !thinking && <EmptyBough onConnectTelegram={() => setSettings(true)} />}
         <DaySpine
           todayKey={dayKey(Date.now())}
@@ -472,7 +527,7 @@ function hootId(): string {
 }
 
 // --- presence header (board 04B, voice rule: chrome is third person) ---------
-function PresenceHeader({ name, state, presence, thinking, runs }: any) {
+function PresenceHeader({ name, state, presence, thinking, runs, compact }: any) {
   const sent = runs.filter((r: any) => r.outcome === "sent").length;
   const missed = runs.filter((r: any) => r.outcome === "missed").length;
   const elapsed = useElapsed(thinking?.startedAt ?? null);
@@ -484,8 +539,8 @@ function PresenceHeader({ name, state, presence, thinking, runs }: any) {
     ? `last heard from you ${timeOf(presence.lastHeard.at)} · ${presence.lastHeard.surface}`
     : null;
   return (
-    <header className="presence">
-      <Glyph state={state} />
+    <header className={`presence${compact ? " compact" : ""}`}>
+      <Glyph state={state} size={compact ? 24 : 40} />
       <div className="presence-lines">
         <h1 className="hero">{hero}</h1>
         <p className="chrome-line">
@@ -777,6 +832,7 @@ function Composer({
   return (
     <form className="composer" onSubmit={submit}>
       <input
+        id="composer-input"
         ref={inputRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
@@ -812,15 +868,18 @@ function Drawer({ side, open, persistOnWide, onClose, label, children }: any) {
   if (!open && !persistOnWide) return null;
   const hidden = persistOnWide && !open ? " drawer-collapsed" : "";
   return (
-    <aside ref={ref} className={`drawer drawer-${side}${hidden}`} role="dialog" aria-modal={open || undefined} aria-label={label}>
-      <header className="drawer-head">
-        <h3>{label}</h3>
-        <button className="ghost" onClick={onClose}>
-          close
-        </button>
-      </header>
-      <div className="drawer-body">{children}</div>
-    </aside>
+    <>
+      {open && <div className="drawer-scrim" aria-hidden="true" onClick={onClose} />}
+      <aside ref={ref} className={`drawer drawer-${side}${hidden}`} role="dialog" aria-modal={open || undefined} aria-label={label}>
+        <header className="drawer-head">
+          <h3>{label}</h3>
+          <button className="ghost" onClick={onClose}>
+            close
+          </button>
+        </header>
+        <div className="drawer-body">{children}</div>
+      </aside>
+    </>
   );
 }
 
