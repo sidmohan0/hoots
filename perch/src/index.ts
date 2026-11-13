@@ -1,7 +1,9 @@
 import { assertConfig, config } from "./config.js";
 import { buildServer } from "./server.js";
 import { startScheduler } from "./scheduler.js";
-import { startTelegramHerald } from "./herald-telegram.js";
+import { registerHerald, startHeralds, stopHeralds } from "./herald.js";
+import { telegramHerald } from "./herald-telegram.js";
+import { imessageHerald } from "./herald-imessage.js";
 import { reconcileTurns, drainAllQueues } from "./turns.js";
 import { logger } from "./log.js";
 import { limitPerMinute, sweep } from "./ratelimit.js";
@@ -23,21 +25,31 @@ app.listen({ port: config.port, host: "127.0.0.1" }).then((addr) => {
 const sweepTimer = setInterval(() => sweep(), 5 * 60_000);
 sweepTimer.unref();
 
-let stopHerald: (() => void) | null = null;
+// Heralds are started from config; each is opt-in and independent.
 if (config.telegramToken) {
-  stopHerald = startTelegramHerald(config.telegramToken);
-  logger.info("herald-telegram started", { transport: "long-polling" });
+  registerHerald(telegramHerald(config.telegramToken));
+  logger.info("herald-telegram registered", { transport: "long-polling" });
 } else {
   logger.info("herald-telegram disabled", { reason: "TELEGRAM_BOT_TOKEN unset" });
 }
+if (config.imessage && config.imessageBuddies) {
+  registerHerald(imessageHerald(config.imessageBuddies));
+} else if (config.imessage) {
+  logger.info("herald-imessage disabled", { reason: "PERCH_IMESSAGE_BUDDY empty" });
+}
+startHeralds();
+const started = config.telegramToken ? ["telegram"] : [];
+if (config.imessage && config.imessageBuddies) started.push("imessage");
+if (started.length) logger.info("heralds started", { heralds: started });
 
 startScheduler();
 logger.info("scheduler armed");
+if (config.nightFlight) logger.info("night flight armed", { at: "03:00 local" });
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
     logger.info("shutting down", { signal: sig });
-    stopHerald?.();
+    stopHeralds();
     app.close().then(() => process.exit(0));
   });
 }

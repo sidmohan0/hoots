@@ -1,10 +1,11 @@
 import rrulePkg from "rrule";
 // rrule ships CJS without an exports map; destructure via default interop.
 const { RRule } = rrulePkg as any;
-import { db, now, uuid, LATE_GRACE_MS, recordAutomationRun, claimMissNote } from "./db.js";
+import { db, now, uuid, LATE_GRACE_MS, recordAutomationRun, claimMissNote, getMeta, setMeta, localDate } from "./db.js";
 import { startTurn } from "./turns.js";
 import { bus } from "./stream.js";
 import { notifyWebhook } from "./outbound.js";
+import { config } from "./config.js";
 
 // --- timezone math ---------------------------------------------------------
 // rrule's tzid support generates candidates as UTC-naive dates whose fields are
@@ -173,11 +174,70 @@ export async function tickScheduler(deliverFn?: (hootId: string, text: string) =
   }
 }
 
+
+// --- night flight ----------------------------------------------------------
+// Autonomous pass at 03:00 local over every active hoot's bough (SPEC §6,
+// DECISIONS.md #10): one short turn each, silent unless a promise says to
+// deliver. Guarded per occurrence so a slept-through night fires once, not a
+// stack of catch-ups.
+export const NIGHT_FLIGHT_PROMPT =
+  "Night flight: reread today, pin anything worth carrying, and note one thing for tomorrow. Two short lines.";
+
+const NIGHT_FLIGHT_RULE = "FREQ=DAILY;BYHOUR=3";
+const NIGHT_FLIGHT_KEY = "nightflight:last_at";
+
+const localZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+/** The most recent 03:00 local occurrence still owed a flight, or null. */
+export function nightFlightDue(nowMs: number = now(), tz: string = localZone()): number | null {
+  if (!config.nightFlight) return null;
+  // Yesterday+now bounds the search to the last night only, so a long outage
+  // yields at most one flight.
+  const occurrence = computeNextFire(NIGHT_FLIGHT_RULE, tz, nowMs - 24 * 60 * 60_000);
+  if (occurrence == null || occurrence > nowMs) return null;
+  const last = Number(getMeta(NIGHT_FLIGHT_KEY) ?? 0);
+  return last >= occurrence ? null : occurrence;
+}
+
+export async function tickNightFlight(): Promise<number> {
+  const at = nightFlightDue();
+  if (at == null) return 0;
+  // Claim before firing: a crash mid-flight must not double-run the night.
+  setMeta(NIGHT_FLIGHT_KEY, String(at));
+  const hoots = db
+    .prepare(
+      `SELECT h.id, t.id AS bough_id FROM hoots h
+       JOIN threads t ON t.hoot_id = h.id AND t.kind = 'bough'
+       WHERE h.status = 'active'`
+    )
+    .all() as any[];
+  let fired = 0;
+  for (const h of hoots) {
+    try {
+      await startTurn({
+        threadId: h.bough_id,
+        trigger: "automation",
+        message: NIGHT_FLIGHT_PROMPT,
+        surface: "silent",
+      });
+      fired += 1;
+    } catch (err: any) {
+      console.log(`[perch] night flight skipped for hoot ${h.id}: ${err?.message ?? err}`);
+    }
+  }
+  console.log(`[perch] night flight for ${localDate(at)} → ${fired}/${hoots.length} active hoot(s)`);
+  return fired;
+}
+
 export function startScheduler(deliverFn?: (hootId: string, text: string) => Promise<void>) {
-  const t = setInterval(() => {
-    tickScheduler(deliverFn).catch(() => {});
-  }, 60_000);
+  const tick = () => {
+    tickScheduler(deliverFn)
+      .catch(() => {})
+      .then(() => tickNightFlight())
+      .catch(() => {});
+  };
+  const t = setInterval(tick, 60_000);
   // also catch up once at boot (coalesced missed fires)
-  setTimeout(() => tickScheduler(deliverFn).catch(() => {}), 3_000);
+  setTimeout(tick, 3_000);
   return t;
 }

@@ -8,7 +8,7 @@ import { logger } from "./log.js";
 const WEBHOOK_TIMEOUT_MS = 5000;
 const SIGNATURE_HEADER = "x-hoots-signature";
 
-export function logOutbound(dest: "model" | "telegram" | "webhook", purpose: string, bytes: number) {
+export function logOutbound(dest: "model" | "telegram" | "imessage" | "webhook", purpose: string, bytes: number) {
   db.prepare(
     `INSERT INTO outbound_log (id, ts, dest, purpose, bytes) VALUES (?, ?, ?, ?, ?)`
   ).run(uuid(), now(), dest, purpose, bytes);
