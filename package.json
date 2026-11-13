@@ -1,0 +1,18 @@
+{
+  "name": "hoots",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Always-on personal agents",
+  "license": "MIT",
+  "workspaces": [
+    "perch",
+    "parliament"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w perch",
+    "build": "npm run build -w perch"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
