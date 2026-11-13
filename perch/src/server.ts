@@ -73,13 +73,28 @@ export function buildServer() {
     const message: string | undefined = req.body?.message;
     const surface: "web" | "telegram" = (req.body?.surface as any) ?? "web";
     try {
-      const { turnId, queued } = await startTurn({
+      const { turnId, queued, queueId } = await startTurn({
         threadId: thread.id, trigger: message ? "user" : "tool", message: message ?? null, surface,
       });
-      return reply.code(202).send({ turn_id: turnId, queued });
+      return reply.code(202).send({ turn_id: turnId, queued, queue_id: queueId ?? null });
     } catch (err: any) {
       return reply.code(409).send({ error: String(err?.message ?? err) });
     }
+  });
+
+  // Queue visibility: what the composer queued for this hoot (never hidden).
+  app.get("/v1/hoots/:id/queued", async (req: Post) =>
+    db.prepare(
+      `SELECT q.id, q.thread_id, q.message, q.surface, q.created_at
+       FROM queued_turns q JOIN threads t ON t.id = q.thread_id
+       WHERE t.hoot_id = ? ORDER BY q.created_at`
+    ).all(req.params.id));
+
+  app.delete("/v1/queued/:id", async (req: Post, reply: Reply) => {
+    const row = db.prepare(`SELECT id FROM queued_turns WHERE id = ?`).get(req.params.id);
+    if (!row) return reply.code(404).send({ error: "not found" });
+    db.prepare(`DELETE FROM queued_turns WHERE id = ?`).run(req.params.id);
+    return { ok: true };
   });
 
   app.get("/v1/threads/:id/items", async (req: Post) =>

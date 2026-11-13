@@ -103,7 +103,7 @@ export async function startTurn(opts: {
   message?: string | null;
   surface?: "web" | "telegram" | "system";
   missNote?: boolean;
-}): Promise<{ turnId: string; queued: boolean }> {
+}): Promise<{ turnId: string; queued: boolean; queueId?: string }> {
   const thread = db.prepare("SELECT * FROM threads WHERE id = ?").get(opts.threadId) as any;
   if (!thread) throw new Error(`thread ${opts.threadId} not found`);
 
@@ -118,9 +118,10 @@ export async function startTurn(opts: {
   } catch {
     // Composer never blocks (DECISIONS.md #6): queue it; it starts when the
     // in-flight turn lands.
+    const queueId = uuid();
     db.prepare(`INSERT INTO queued_turns (id, thread_id, message, surface, miss_note, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(uuid(), thread.id, opts.message ?? "", opts.surface ?? "web", opts.missNote ? 1 : 0, now());
-    return { turnId: "", queued: true };
+      .run(queueId, thread.id, opts.message ?? "", opts.surface ?? "web", opts.missNote ? 1 : 0, now());
+    return { turnId: "", queued: true, queueId };
   }
 
   const surface = opts.surface ?? "web";
