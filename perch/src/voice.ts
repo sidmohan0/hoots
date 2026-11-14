@@ -171,8 +171,10 @@ export async function decodeOggOpus(buf: Buffer): Promise<Audio> {
   const { OggOpusDecoder } = await import("ogg-opus-decoder");
   const decoder: any = new OggOpusDecoder();
   try {
-    const res = await decoder.decodeFile(new Uint8Array(buf));
-    return { samples: res.samplesDecoded, sampleRate: res.sampleRate };
+    const res: any = await decoder.decodeFile(new Uint8Array(buf));
+    const ch: Float32Array | undefined = res?.channelData?.[0] ?? res?.samplesDecoded;
+    if (!ch?.length) throw new Error("opus: no samples");
+    return { samples: ch, sampleRate: res.sampleRate };
   } finally {
     decoder.free?.();
   }
@@ -387,4 +389,113 @@ export function encodeWav16(samples: Float32Array, rate: number): Buffer {
     buf.writeInt16LE(Math.round(s * 32767), 44 + i * 2);
   }
   return buf;
+}
+
+
+// --- voice out to Telegram: WAV -> OGG/Opus ---------------------------------
+// Telegram voice notes are OGG containers of Opus frames at 48 kHz. We encode
+// with libopus (native) and write a minimal, spec-correct OGG stream.
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let r = i << 24;
+    for (let b = 0; b < 8; b++) r = r & 0x80000000 ? (r << 1) ^ 0x04c11db7 : r << 1;
+    t[i] = r >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf: Buffer): number {
+  let c = 0;
+  for (const byte of buf) c = (CRC_TABLE[((c >>> 24) ^ byte) & 0xff] ^ (c << 8)) >>> 0;
+  return c;
+}
+
+function oggPage(serial: number, seq: number, granule: bigint, packet: Buffer, headerType = 0): Buffer {
+  const lacing: number[] = [];
+  let left = packet.length;
+  while (left >= 255) {
+    lacing.push(255);
+    left -= 255;
+  }
+  lacing.push(left);
+  const head = Buffer.alloc(27);
+  head.write("OggS", 0);
+  head.writeUInt8(0, 4); // version
+  head.writeUInt8(headerType, 5);
+  head.writeBigInt64LE(granule, 6);
+  head.writeUInt32LE(serial >>> 0, 14);
+  head.writeUInt32LE(seq >>> 0, 18);
+  head.writeUInt32LE(0, 22); // crc placeholder
+  head.writeUInt8(lacing.length, 26);
+  const page = Buffer.concat([head, Buffer.from(lacing), packet]);
+  page.writeUInt32LE(crc32(page), 22);
+  return page;
+}
+
+function resampleTo48k(samples: Float32Array, rate: number): Float32Array {
+  if (rate === 48000) return samples;
+  const ratio = 48000 / rate;
+  const out = new Float32Array(Math.floor(samples.length * ratio));
+  for (let i = 0; i < out.length; i++) {
+    const pos = i / ratio;
+    const i0 = Math.floor(pos);
+    const frac = pos - i0;
+    const a = samples[i0] ?? 0;
+    const b = samples[Math.min(i0 + 1, samples.length - 1)] ?? 0;
+    out[i] = a + (b - a) * frac;
+  }
+  return out;
+}
+
+export type WavAudio = { samples: Float32Array; sampleRate: number };
+
+/** Encode 16-bit mono PCM (any rate) as an OGG/Opus voice note. */
+export async function encodeOggOpus(audio: WavAudio): Promise<Buffer> {
+  const mod: any = await import("@discordjs/opus");
+  const OpusEncoder = mod.OpusEncoder ?? mod.default?.OpusEncoder;
+  const enc = new OpusEncoder(48000, 1);
+  const pcm = resampleTo48k(audio.samples, audio.sampleRate);
+  const serial = (Math.random() * 0xffffffff) >>> 0;
+  const chunks: Buffer[] = [];
+
+  const head = Buffer.alloc(19);
+  head.write("OpusHead", 0);
+  head.writeUInt8(1, 8);
+  head.writeUInt8(1, 9);
+  head.writeUInt16LE(312, 10); // pre-skip
+  head.writeUInt32LE(48000, 12);
+  head.writeInt16LE(0, 16);
+  head.writeUInt8(0, 18);
+  chunks.push(oggPage(serial, 0, 0n, head, 0x02));
+
+  const vendor = Buffer.from("hoots", "utf8");
+  const tags = Buffer.alloc(16 + vendor.length);
+  tags.write("OpusTags", 0, "ascii");
+  tags.writeUInt32LE(vendor.length, 8);
+  vendor.copy(tags, 12);
+  tags.writeUInt32LE(0, 12 + vendor.length);
+  chunks.push(oggPage(serial, 1, 0n, tags));
+
+  const FRAME = 960; // 20 ms at 48 kHz
+  let seq = 2;
+  let granule = 0;
+  for (let i = 0; i < pcm.length; i += FRAME) {
+    const slice = pcm.subarray(i, Math.min(i + FRAME, pcm.length));
+    const int16 = Buffer.alloc(slice.length * 2);
+    for (let j = 0; j < slice.length; j++) {
+      const v = Math.max(-1, Math.min(1, slice[j]));
+      int16.writeInt16LE(Math.round(v * 32767), j * 2);
+    }
+    let packet: Buffer;
+    try {
+      packet = enc.encode(int16);
+    } catch {
+      continue;
+    }
+    granule += slice.length;
+    chunks.push(oggPage(serial, seq++, BigInt(granule), packet));
+  }
+  return Buffer.concat(chunks);
 }

@@ -57,3 +57,18 @@ describe("speakable", () => {
     expect(out).toContain("bullet");
   });
 });
+
+describe("ogg/opus encoding", () => {
+  it("round-trips audio through an OggS container", async () => {
+    const { encodeOggOpus, decodeOggOpus } = await import("../src/voice.js");
+    const rate = 48000;
+    const samples = new Float32Array(rate);
+    for (let i = 0; i < samples.length; i++) samples[i] = Math.sin((2 * Math.PI * 440 * i) / rate) * 0.4;
+    const ogg = await encodeOggOpus({ samples, sampleRate: rate });
+    expect(ogg.subarray(0, 4).toString()).toBe("OggS");
+    expect(ogg.subarray(28, 36).toString()).toBe("OpusHead");
+    const back = await decodeOggOpus(ogg);
+    expect(back.sampleRate).toBe(48000);
+    expect(back.samples.length).toBeGreaterThan(rate * 0.8);
+  }, 20_000);
+});

@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@discordjs/opus": "^0.11.0",
     "better-sqlite3": "^12.4.1",
     "dotenv": "^17.2.3",
     "espeak-ng": "^1.0.2",

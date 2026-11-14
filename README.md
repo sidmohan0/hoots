@@ -66,6 +66,8 @@ curl -X POST localhost:7420/v1/voice/model/pull -H "Authorization: Bearer $PERCH
 
 Then either speak in the app (the mic in the composer) or send voice notes on
 Telegram. Audio is transcribed to a normal turn — same ledger, same surfaces.
+A voice note gets a voice reply (OGG/Opus, encoded locally) while the voice
+models are present; otherwise replies stay text.
 The recogniser unloads after five idle minutes, so people who never speak keep a
 light daemon. Speech out runs locally too: a Piper voice (VITS, ~63 MB, pulled separately) with
 espeak-ng phonemisation compiled to WASM. Speak a reply from its ♪ button, or
