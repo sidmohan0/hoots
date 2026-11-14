@@ -28,6 +28,8 @@ export function Settings({
   onSaved,
   autoSpeak,
   onAutoSpeak,
+  computerMode,
+  onComputerMode,
 }: {
   open: boolean;
   hoot: any | null;
@@ -35,6 +37,8 @@ export function Settings({
   onSaved: (hoot: any) => void;
   autoSpeak?: boolean;
   onAutoSpeak?: (v: boolean) => void;
+  computerMode?: string;
+  onComputerMode?: (mode: string) => void;
 }) {
   const [name, setName] = useState("");
   const [persona, setPersona] = useState("");
@@ -172,6 +176,31 @@ export function Settings({
             <input type="checkbox" checked={!!autoSpeak} onChange={(e) => onAutoSpeak?.(e.target.checked)} />
             <span />
           </label>
+        </div>
+
+        <div className="field">
+          <span className="label">COMPUTER</span>
+          <div className="segmented" role="radiogroup" aria-label="Computer use">
+            {(["off", "confirm", "auto"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="radio"
+                aria-checked={(computerMode ?? "confirm") === m}
+                className={"segment" + ((computerMode ?? "confirm") === m ? " on" : "")}
+                onClick={() => onComputerMode?.(m)}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+          <span className="caption muted">
+            {computerMode === "off"
+              ? "Reads and clicks nothing."
+              : computerMode === "auto"
+                ? "Clicks, types and submits freely — receipts are still written."
+                : "Free to navigate; Send/Pay/Delete pause for one tap."}
+          </span>
         </div>
 
         <div className="field">

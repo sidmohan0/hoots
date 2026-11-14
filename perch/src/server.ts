@@ -17,6 +17,9 @@ import { bindChannel, channelForChat } from "./herald-telegram.js";
 import { bindSurface, channelFor } from "./herald.js";
 import { deriveTopics } from "./topics.js";
 import { modelStatus, pullModel, speak, transcribeBuffer, ttsStatus, pullTtsModel } from "./voice.js";
+import { decide } from "./computer/session.js";
+import { available as computerAvailable } from "./computer/platform.js";
+import { notes as computerNotes } from "./computer/darwin.js";
 
 type Post = { body: any; params: any; query: any };
 
@@ -34,7 +37,7 @@ export function buildServer() {
     if (req.url === "/v1/health" || req.url === "/v1/openapi.json") return;
     if (
       req.url === "/" ||
-      req.url.startsWith("/assets/") ||
+      req.url.startsWith("/assets/") || req.url.startsWith("/shots/") ||
       req.url.startsWith("/v1/stream") ||
       ["/appicon.png", "/manifest.webmanifest", "/sw.js", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png", "/apple-touch-icon.png"].includes(req.url.split("?")[0])
     )
@@ -111,16 +114,16 @@ export function buildServer() {
   app.patch("/v1/hoots/:id", async (req: Post, reply: Reply) => {
     const h = db.prepare("SELECT * FROM hoots WHERE id = ?").get(req.params.id) as any;
     if (!h) return reply.code(404).send({ error: "not found" });
-    const { name, system_prompt, model_name, model_params, status, api_key_env, model_base_url } = req.body ?? {};
+    const { name, system_prompt, model_name, model_params, status, api_key_env, model_base_url, computer_mode } = req.body ?? {};
     if (api_key_env && !process.env[api_key_env]) {
       return reply.code(400).send({ error: `env ${api_key_env} is not set on the perch` });
     }
     db.prepare(
-      `UPDATE hoots SET name=?, system_prompt=?, model_name=?, model_params=?, status=?, api_key_env=?, model_base_url=? WHERE id=?`
+      `UPDATE hoots SET name=?, system_prompt=?, model_name=?, model_params=?, status=?, api_key_env=?, model_base_url=?, computer_mode=? WHERE id=?`
     ).run(
       name ?? h.name, system_prompt ?? h.system_prompt, model_name ?? h.model_name,
       model_params ? JSON.stringify(model_params) : h.model_params, status ?? h.status,
-      api_key_env ?? h.api_key_env, model_base_url ?? h.model_base_url, h.id
+      api_key_env ?? h.api_key_env, model_base_url ?? h.model_base_url, computer_mode ?? h.computer_mode, h.id
     );
     bus.publish({ event: "hoot.updated", data: { hoot_id: h.id } });
     return db.prepare("SELECT * FROM hoots WHERE id = ?").get(h.id);
@@ -336,6 +339,29 @@ export function buildServer() {
     if (!text) return reply.code(422).send({ error: "heard nothing" });
     const { turnId, queued } = await startTurn({ threadId: thread.id, trigger: "user", message: text, surface: "web" });
     return reply.code(202).send({ turn_id: turnId, queued, transcript: text });
+  });
+
+  // --- computer use ---
+  app.get("/v1/computer/status", async () => ({
+    platform: process.platform,
+    available: computerAvailable(),
+    permissions: computerNotes,
+    maxSteps: Number(process.env.PERCH_COMPUTER_MAX_STEPS ?? 60),
+  }));
+  app.get("/v1/approvals", async () =>
+    db
+      .prepare(`SELECT * FROM approvals WHERE status = 'pending' ORDER BY created_at LIMIT 20`)
+      .all());
+  app.post("/v1/approvals/:id", async (req: Post, reply: Reply) => {
+    const decision = req.body?.decision === "deny" ? "denied" : "approved";
+    return decide(req.params.id, decision) ? { ok: true } : reply.code(404).send({ error: "not pending" });
+  });
+  // Screenshots are receipts: served like the UI, auth-free same-origin.
+  app.get("/shots/*", async (req: any, reply: Reply) => {
+    const rel = (req.params as any)["*"];
+    const file = path.join(config.dataDir, "shots", rel);
+    if (!existsSync(file)) return reply.code(404).send({ error: "not found" });
+    reply.type("image/jpeg").send(readFileSync(file));
   });
 
   // --- presence (board 04B: one line, third person) ---

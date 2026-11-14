@@ -1,6 +1,9 @@
 import { db, now, uuid, localDate } from "./db.js";
-import { runTurn, type ModelConfig, type TurnContext } from "./model.js";
+import { runTurn, ToolLoopMaxHopsComputer, type ModelConfig, type TurnContext } from "./model.js";
 import { builtInTools } from "./tools.js";
+import { computerTools } from "./computer/tools.js";
+import { openSession, type Session } from "./computer/session.js";
+import { available as computerAvailable } from "./computer/platform.js";
 import { bus } from "./stream.js";
 import { pelletContextBlock, regeneratePellet } from "./pellet.js";
 import { notifyWebhook } from "./outbound.js";
@@ -36,7 +39,24 @@ const MISS_NOTE =
 const huntLine = (goal: string | null) =>
   `This is a hunt: ${goal ?? ""}. Work it to completion, then summarise in one short message.`;
 
-function buildMessages(hoot: any, thread: any, userText: string | null, missNote = false) {
+const sessions = new Map<string, Session>();
+
+/** Sessions open lazily: only turns that actually touch the machine pay for one. */
+function sessionFor(turnId: string): Session | null {
+  return sessions.get(turnId) ?? null;
+}
+
+export function ensureSession(turnId: string, hoot: any, threadId: string): Session | null {
+  if (!computerAvailable()) return null;
+  if ((hoot.computer_mode ?? "confirm") === "off") return null;
+  const existing = sessions.get(turnId);
+  if (existing) return existing;
+  const created = openSession({ hoot, threadId, turnId });
+  sessions.set(turnId, created);
+  return created;
+}
+
+function buildMessages(hoot: any, thread: any, userText: string | null, turnIdForBuild: string, missNote = false) {
   const history = db
     .prepare(
       `SELECT kind, role, content FROM items WHERE thread_id = ?
@@ -48,6 +68,18 @@ function buildMessages(hoot: any, thread: any, userText: string | null, missNote
 
   const messages: any[] = [];
   const systemParts = [hoot.system_prompt];
+  if (sessions.has(turnIdForBuild)) {
+    systemParts.push(
+      [
+        "You are driving this computer through tools. Finish the task in as few steps as possible.",
+        "Recipe: `screen` once → act → `screen` only if the result is unclear. Never screen twice in a row without an action between them.",
+        "`click` takes an on-screen label and finds it in the front window; use coordinates only when a label is ambiguous.",
+        "Consequential clicks (Send, Pay, Delete, Return) pause for approval automatically — after the decision, immediately continue with the next step.",
+        "If the front window already shows what you need, act now instead of re-checking. Prefer cmd+l for the address bar and tab between fields.",
+        "When done: one short line saying what changed. If blocked, name the blocker plainly.",
+      ].join(" ")
+    );
+  }
   const memory = pelletContextBlock(hoot.id);
   if (memory) systemParts.push(memory);
   if (thread.kind === "hunt") systemParts.push(huntLine(thread.goal));
@@ -217,7 +249,7 @@ async function executeTurn(turnId: string, hoot: any, thread: any, missNote = fa
 
   const model: ModelConfig = {
     baseUrl: hoot.model_base_url,
-    apiKey: process.env.OPENAI_API_KEY ?? "",
+    apiKey: (hoot.api_key_env ? process.env[hoot.api_key_env] : undefined) ?? process.env.OPENAI_API_KEY ?? "",
     model: hoot.model_name,
     params: hoot.model_params ? JSON.parse(hoot.model_params) : null,
   };
@@ -225,9 +257,13 @@ async function executeTurn(turnId: string, hoot: any, thread: any, missNote = fa
   const lastUser = db
     .prepare(`SELECT content FROM items WHERE turn_id = ? AND role = 'user' ORDER BY seq DESC LIMIT 1`)
     .get(turnId) as any;
-  const messages = buildMessages(hoot, thread, lastUser ? JSON.parse(lastUser.content).text : null, missNote);
+  // Open any computer session before the prompt is built, so the hoot knows
+  // it can drive and which policy applies.
+  ensureSession(turnId, hoot, thread.id);
+  const messages = buildMessages(hoot, thread, lastUser ? JSON.parse(lastUser.content).text : null, turnId, missNote);
+  const tools = [...builtInTools(), ...computerTools(sessionFor)];
 
-  await runTurn(model, messages, builtInTools(), ctx, {
+  await runTurn(model, messages, tools, ctx, {
     onItem: (item) => {
       seq += 1;
       const id = uuid();
@@ -239,8 +275,9 @@ async function executeTurn(turnId: string, hoot: any, thread: any, missNote = fa
       invalidateDigestIfPast(hoot.id, createdAt);
       bus.publish({ event: "item.append", data: { item: { id, turn_id: turnId, thread_id: thread.id, seq, ...item } } });
     },
-  });
+  }, sessionFor(turnId) ? ToolLoopMaxHopsComputer : undefined, sessionFor(turnId) ? 3 * 60_000 : 0);
 
+  sessions.delete(turnId);
   releaseTurn(thread.id, turnId, "completed");
   db.prepare(`UPDATE threads SET updated_at=? WHERE id=?`).run(now(), thread.id);
   completeHuntIfOpen(thread);

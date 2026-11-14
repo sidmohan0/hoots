@@ -55,6 +55,10 @@ export const api = {
   outbound: () => req<{ count: number; bytes: number }>("/v1/outbound/today"),
   pellet: (hootId: string) => req<any>(`/v1/hoots/${hootId}/pellet`),
   voiceStatus: () => req<{ present: boolean; bytes: number; expected: number; loaded: boolean; pulling: boolean }>("/v1/voice/status"),
+  approvals: () => req<any[]>("/v1/approvals"),
+  decideApproval: (id: string, decision: "approve" | "deny") =>
+    req<any>(`/v1/approvals/${id}`, { method: "POST", body: JSON.stringify({ decision }) }),
+  computerStatus: () => req<{ platform: string; available: boolean; permissions: string[]; maxSteps: number }>("/v1/computer/status"),
   voicePull: (which: "stt" | "tts" = "stt") =>
     req<any>(`/v1/voice/model/${which === "tts" ? "pull-tts" : "pull"}`, { method: "POST" }),
   speak: async (text: string): Promise<Blob> => {

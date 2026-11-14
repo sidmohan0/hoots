@@ -186,3 +186,23 @@ export function localDayBounds(date: string): { start: number; end: number } {
   const [y, m, d] = date.split("-").map(Number);
   return { start: new Date(y, m - 1, d).getTime(), end: new Date(y, m - 1, d + 1).getTime() };
 }
+
+db.exec(`CREATE TABLE IF NOT EXISTS approvals (
+  id TEXT PRIMARY KEY,
+  turn_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  hoot_id TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at INTEGER NOT NULL,
+  decided_at INTEGER
+)`);
+db.exec(`CREATE TABLE IF NOT EXISTS computer_places (
+  id TEXT PRIMARY KEY,
+  turn_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  app TEXT,
+  label TEXT,
+  created_at INTEGER NOT NULL
+)`);

@@ -54,6 +54,19 @@ was cut.
 One process owns all state. The UI holds none: it is a view over the API, and
 the same conversation can happen from Telegram.
 
+## Computer use
+
+The hoot can drive the whole machine: screenshots + on-screen text (OCR), clicks,
+typing, keys, drag, clipboard, app activation. It is free to navigate; only
+consequential moments (Send, Submit, Pay, Delete, cmd+Return, or an explicit
+`ask_before`) pause in the bough for one tap. Every step leaves a screenshot
+receipt under `~/.hoots/shots/`, and one turn may take at most 60 steps (or the
+env-configured budget).
+
+macOS needs **Screen Recording** and **Accessibility** for the perch binary.
+Windows support is compiled but untested; Linux is unbuilt. Modes per hoot:
+`off`, `confirm` (default), `auto`.
+
 ## Voice (screech)
 
 Speech in runs entirely on your machine: **Parakeet TDT 0.6B v3** (25 languages,

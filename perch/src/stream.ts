@@ -8,7 +8,9 @@ export type StreamEvent =
   | { event: "fact.changed"; data: Record<string, unknown> }
   | { event: "promise.changed"; data: Record<string, unknown> }
   | { event: "thread.created"; data: Record<string, unknown> }
-  | { event: "thread.updated"; data: Record<string, unknown> };
+  | { event: "thread.updated"; data: Record<string, unknown> }
+  | { event: "approval.request"; data: Record<string, unknown> }
+  | { event: "approval.decided"; data: Record<string, unknown> };
 
 export type TaggedEvent = StreamEvent & { id: number };
 

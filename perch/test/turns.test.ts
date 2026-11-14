@@ -8,6 +8,8 @@ const calls: Call[] = [];
 let gate: (() => void) | null = null;
 
 vi.mock("../src/model.js", () => ({
+  ToolLoopMaxHopsComputer: 24,
+  ToolLoopMaxHops: 8,
   runTurn: async (
     _model: unknown,
     messages: { role: string; content: string }[],

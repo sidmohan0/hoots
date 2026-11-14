@@ -71,6 +71,7 @@ export function App() {
   const [rec, setRec] = useState<{ stop: () => Promise<{ blob: Blob; ms: number }> } | null>(null);
   const [voiceBusy, setVoiceBusy] = useState<"idle" | "recording" | "hearing">("idle");
   const [autoSpeak, setAutoSpeak] = useState(() => localStorage.getItem("autoSpeak") === "1");
+  const [approvals, setApprovals] = useState<any[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // hunts are never pages: their turns render inline in the bough under a
   // header row, keyed by thread. Hunt goals come from the thread list.
@@ -167,6 +168,9 @@ export function App() {
     api.promiseRuns(hootId(), dayKey(Date.now())).then(setRuns).catch(() => {});
   };
   useEffect(loadRuns, [hootId()]);
+  useEffect(() => {
+    api.approvals().then(setApprovals).catch(() => {});
+  }, []);
 
   // --- keyboard map: / composer · M memory · P promises · [ ] days · 1–9 hoots
   const dayKeys = useMemo(() => [...new Set(items.map((i) => dayKey(i.created_at)))].sort(), [items]);
@@ -254,6 +258,9 @@ export function App() {
       }
     }
     if (ev.event === "fact.changed") loadFacts();
+    if (ev.event === "approval.request") setApprovals((prev) => [...prev, ev.data]);
+    if (ev.event === "approval.decided")
+      setApprovals((prev) => prev.filter((a) => a.id !== ev.data.id));
     if (ev.event === "thread.created") {
       // A hunt was spawned mid-session: name it up front so its turns can carry
       // the header row (items themselves arrive as normal item.append events).
@@ -539,6 +546,27 @@ export function App() {
           focusDay={route.day}
           onSpeak={speak}
         />
+        {approvals.map((a) => (
+          <div className="approval-card" key={a.id} role="alertdialog" aria-label="Approval needed">
+            <p className="approval-title">Approve this?</p>
+            <p className="approval-summary">{a.summary}</p>
+            <div className="card-actions">
+              <button
+                className="btn-primary"
+                onClick={() => api.decideApproval(a.id, "approve").then(() => setApprovals((p) => p.filter((x) => x.id !== a.id)))}
+              >
+                Approve
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => api.decideApproval(a.id, "deny").then(() => setApprovals((p) => p.filter((x) => x.id !== a.id)))}
+              >
+                Deny
+              </button>
+            </div>
+          </div>
+        ))}
+
         {proposing && !proposal && <p className="proposal-line pending">drafting the promise…</p>}
         {proposal && (
           <PromiseCard
@@ -625,6 +653,13 @@ export function App() {
         }}
       />
       <Settings
+        computerMode={hoots.find((h) => h.id === hootId())?.computer_mode ?? "confirm"}
+        onComputerMode={(mode: string) => {
+          const id = hootId();
+          api.patchHoot(id, { computer_mode: mode }).then((next) =>
+            setHoots((prev) => prev.map((h) => (h.id === id ? { ...h, ...next } : h)))
+          );
+        }}
         autoSpeak={autoSpeak}
         onAutoSpeak={(v: boolean) => {
           setAutoSpeak(v);
@@ -956,6 +991,21 @@ function ItemRow({ item, topic, onSpeak }: { item: Item; topic: string | null; o
           {c.fact}
         </span>
       </div>
+    );
+  }
+  if (item.kind === "tool_result" && c?.result?.shotId) {
+    return (
+      <div className="step-receipt">
+        <img src={`/shots/${item.turn_id}/${c.result.shotId}`} alt="" loading="lazy" />
+        <span>{c.result.summary}</span>
+      </div>
+    );
+  }
+  if (item.kind === "tool_call" && c?.name && !["recall", "remember"].includes(c.name)) {
+    return (
+      <p className="tool-trace">
+        {c.name} {typeof c.arguments === "string" ? c.arguments.slice(0, 90) : ""}
+      </p>
     );
   }
   if (item.kind !== "message") return null;

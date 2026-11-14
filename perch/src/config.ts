@@ -9,6 +9,7 @@ export const config = {
   openaiBaseUrl: process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1",
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   telegramToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
+  computerEnabled: process.env.PERCH_COMPUTER !== "0",
   // iMessage bridge is macOS-only and opt-in; both flags must be present.
   imessage: process.env.PERCH_IMESSAGE === "true",
   imessageBuddies: process.env.PERCH_IMESSAGE_BUDDY ?? "",

@@ -28,14 +28,18 @@ export type ModelConfig = {
 };
 
 export const ToolLoopMaxHops = 8;
+export const ToolLoopMaxHopsComputer = 16;
 
 export async function runTurn(
   model: ModelConfig,
   messages: ChatCompletionMessageParam[],
   tools: ToolDef[],
   ctx: TurnContext,
-  cb: LoopCallbacks
+  cb: LoopCallbacks,
+  maxHops = ToolLoopMaxHops,
+  deadlineMs = 0
 ): Promise<string> {
+  const startedAt = Date.now();
   const client = new OpenAI({ baseURL: model.baseUrl, apiKey: model.apiKey });
   const openaiTools: ChatCompletionTool[] = tools.map((t) => ({
     type: "function" as const,
@@ -43,7 +47,8 @@ export async function runTurn(
   }));
 
   const convo = [...messages];
-  for (let hop = 0; hop < ToolLoopMaxHops; hop++) {
+  for (let hop = 0; hop < maxHops; hop++) {
+    if (deadlineMs && Date.now() - startedAt > deadlineMs) break;
     logOutbound("model", `turn ${ctx.turnId} hop ${hop + 1}`, JSON.stringify(convo).length);
     const res = await client.chat.completions.create({
       model: model.model,
@@ -55,7 +60,21 @@ export async function runTurn(
     convo.push(msg as ChatCompletionMessageParam);
 
     if (msg.tool_calls?.length) {
-      for (const call of msg.tool_calls as ChatCompletionMessageFunctionToolCall[]) {
+      // Providers occasionally emit the same call twice; run it once.
+      const seen = new Set<string>();
+      const unique = (msg.tool_calls as ChatCompletionMessageFunctionToolCall[]).filter((c) => {
+        const key = `${c.function.name}:${c.function.arguments}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (unique.length !== msg.tool_calls.length) {
+        // keep the trailing ids satisfied so the convo stays valid
+        for (const dup of (msg.tool_calls as ChatCompletionMessageFunctionToolCall[]).filter((c) => !unique.includes(c))) {
+          convo.push({ role: "tool", tool_call_id: dup.id, content: JSON.stringify({ deduped: true }) } as any);
+        }
+      }
+      for (const call of unique) {
         const def = tools.find((t) => t.name === call.function.name);
         let result: unknown;
         try {
@@ -86,5 +105,13 @@ export async function runTurn(
     cb.onItem({ kind: "message", role: "hoot", content: { text } });
     return text;
   }
-  throw new Error("tool loop exceeded max hops");
+  // Out of hops: one last tool-free pass so the turn still ends with words.
+  const wrap = await client.chat.completions.create({
+    model: model.model,
+    messages: [...convo, { role: "user", content: "Stop calling tools. In two lines: what did you manage, and what is left?" }],
+    ...model.params,
+  });
+  const text = wrap.choices[0]?.message?.content ?? "(stopped after too many steps)";
+  cb.onItem({ kind: "message", role: "hoot", content: { text } });
+  return text;
 }
