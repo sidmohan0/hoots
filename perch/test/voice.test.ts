@@ -45,3 +45,15 @@ describe("voice wav decoding", () => {
     expect(typeof s.present).toBe("boolean");
   });
 });
+
+describe("speakable", () => {
+  it("strips markdown and code before reading aloud", async () => {
+    const { speakable } = await import("../src/voice.js");
+    const out = speakable("**Bold** and `code` and [link](https://x.y)\n\n```js\nlet a = 1;\n```\n- bullet");
+    expect(out).not.toContain("**");
+    expect(out).not.toContain("https://");
+    expect(out).not.toContain("let a = 1");
+    expect(out).toContain("Bold");
+    expect(out).toContain("bullet");
+  });
+});

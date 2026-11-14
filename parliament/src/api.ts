@@ -55,7 +55,17 @@ export const api = {
   outbound: () => req<{ count: number; bytes: number }>("/v1/outbound/today"),
   pellet: (hootId: string) => req<any>(`/v1/hoots/${hootId}/pellet`),
   voiceStatus: () => req<{ present: boolean; bytes: number; expected: number; loaded: boolean; pulling: boolean }>("/v1/voice/status"),
-  voicePull: () => req<any>("/v1/voice/model/pull", { method: "POST" }),
+  voicePull: (which: "stt" | "tts" = "stt") =>
+    req<any>(`/v1/voice/model/${which === "tts" ? "pull-tts" : "pull"}`, { method: "POST" }),
+  speak: async (text: string): Promise<Blob> => {
+    const res = await fetch("/v1/voice/speak", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token()}`, "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) throw new Error(`speak → ${res.status}`);
+    return res.blob();
+  },
   voiceTurn: async (hootId: string, wav: Blob) => {
     const res = await fetch(`/v1/hoots/${hootId}/voice/turn`, {
       method: "POST",

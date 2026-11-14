@@ -16,13 +16,13 @@ import { bus } from "./stream.js";
 import { bindChannel, channelForChat } from "./herald-telegram.js";
 import { bindSurface, channelFor } from "./herald.js";
 import { deriveTopics } from "./topics.js";
-import { modelStatus, pullModel, transcribeBuffer } from "./voice.js";
+import { modelStatus, pullModel, speak, transcribeBuffer, ttsStatus, pullTtsModel } from "./voice.js";
 
 type Post = { body: any; params: any; query: any };
 
 // Composer guard: empty turns are a no-op and runaway pastes blow the context.
 const MAX_MESSAGE_CHARS = 32 * 1024;
-type Reply = { code: (c: number) => { send: (x: unknown) => unknown } };
+type Reply = { code: (c: number) => { send: (x: unknown) => unknown }; type: (t: string) => { send: (x: unknown) => unknown } };
 
 export function buildServer() {
   const app = Fastify({ logger: false });
@@ -285,14 +285,30 @@ export function buildServer() {
     (_req, body, done) => done(null, body)
   );
 
-  app.get("/v1/voice/status", async () => modelStatus());
+  app.get("/v1/voice/status", async () => ({ stt: modelStatus(), tts: ttsStatus() }));
   app.post("/v1/voice/model/pull", async (_req, reply) => {
     pullModel().catch((err) => bus.publish({ event: "turn.status", data: { voice_pull_error: String(err) } }));
     return reply.code(202).send({ ...modelStatus(), pulling: true });
   });
+  app.post("/v1/voice/model/pull-tts", async (_req, reply: Reply) => {
+    pullTtsModel().catch((err) => logger.warn("voice out pull failed", { error: err }));
+    return reply.code(202).send({ ...ttsStatus(), pulling: true });
+  });
+  // Speech out: text in, WAV out. The client decides when to play.
+  app.post("/v1/voice/speak", async (req: Post, reply: Reply) => {
+    const text = String(req.body?.text ?? "").trim().slice(0, 1200);
+    if (!text) return reply.code(400).send({ error: "text required" });
+    if (!ttsStatus().present) return reply.code(409).send({ error: "voice model missing", needsModel: true });
+    try {
+      const wav = await speak(text, Number(req.body?.speed ?? 1) || 1);
+      return reply.type("audio/wav").send(wav);
+    } catch (err: any) {
+      return reply.code(500).send({ error: `speech failed: ${err?.message ?? err}` });
+    }
+  });
+
   app.post("/v1/voice/transcribe", async (req: any, reply: Reply) => {
-    const status = modelStatus();
-    if (!status.present) return reply.code(409).send({ error: "voice model missing", needsModel: true });
+    if (!modelStatus().present) return reply.code(409).send({ error: "voice model missing", needsModel: true });
     const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from([]);
     if (!body.length) return reply.code(400).send({ error: "empty audio" });
     try {
@@ -304,8 +320,7 @@ export function buildServer() {
   });
   // Voice in → normal turn. Same ledger, same surface rules.
   app.post("/v1/hoots/:id/voice/turn", async (req: any, reply: Reply) => {
-    const status = modelStatus();
-    if (!status.present) return reply.code(409).send({ error: "voice model missing", needsModel: true });
+    if (!modelStatus().present) return reply.code(409).send({ error: "voice model missing", needsModel: true });
     const thread = db
       .prepare(`SELECT id FROM threads WHERE hoot_id = ? AND kind = 'bough'`)
       .get(req.params.id) as any;

@@ -2,6 +2,7 @@
 
 - Screech v1: Parakeet TDT 0.6B v3 in-process (sherpa-onnx), push-to-talk in the
   app, voice notes as turns, model pull + idle unload
+- Screech v2: Piper voice out (local VITS + WASM espeak), speak buttons, auto-speak
 - Desktop shell (Tauri 2): tray, close-to-tray, single instance, hoots:// scheme
 - PWA: installable, shell cache
 - Byte-range ops: rate limits, webhooks, backups, migrations, OpenAPI, lint

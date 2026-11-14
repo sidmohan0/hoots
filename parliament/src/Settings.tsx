@@ -26,11 +26,15 @@ export function Settings({
   hoot,
   onClose,
   onSaved,
+  autoSpeak,
+  onAutoSpeak,
 }: {
   open: boolean;
   hoot: any | null;
   onClose: () => void;
   onSaved: (hoot: any) => void;
+  autoSpeak?: boolean;
+  onAutoSpeak?: (v: boolean) => void;
 }) {
   const [name, setName] = useState("");
   const [persona, setPersona] = useState("");
@@ -155,6 +159,17 @@ export function Settings({
           </div>
           <label className="switch">
             <input type="checkbox" checked={paused} onChange={(e) => togglePause(e.target.checked)} />
+            <span />
+          </label>
+        </div>
+
+        <div className="field row">
+          <div>
+            <span className="label">SPEAK REPLIES</span>
+            <p className="caption muted">Reads new replies out loud, on this machine.</p>
+          </div>
+          <label className="switch">
+            <input type="checkbox" checked={!!autoSpeak} onChange={(e) => onAutoSpeak?.(e.target.checked)} />
             <span />
           </label>
         </div>

@@ -70,6 +70,8 @@ export function App() {
   const [runs, setRuns] = useState<any[]>([]);
   const [rec, setRec] = useState<{ stop: () => Promise<{ blob: Blob; ms: number }> } | null>(null);
   const [voiceBusy, setVoiceBusy] = useState<"idle" | "recording" | "hearing">("idle");
+  const [autoSpeak, setAutoSpeak] = useState(() => localStorage.getItem("autoSpeak") === "1");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   // hunts are never pages: their turns render inline in the bough under a
   // header row, keyed by thread. Hunt goals come from the thread list.
   const [hunts, setHunts] = useState<Record<string, { id: string; goal: string | null }>>({});
@@ -366,6 +368,29 @@ export function App() {
 
   const retry = (p: Pending) => postTurn(p.tid, p.text);
 
+  const speak = async (text: string) => {
+    try {
+      const blob = await api.speak(text);
+      const url = URL.createObjectURL(blob);
+      audioRef.current?.pause();
+      const a = audioRef.current ?? new Audio();
+      audioRef.current = a;
+      a.src = url;
+      a.onended = () => URL.revokeObjectURL(url);
+      await a.play();
+    } catch (err: any) {
+      if (String(err?.message ?? "").includes("409")) {
+        toast("Voice out needs a one-time model (~63 MB)", {
+          label: "download",
+          run: async () => {
+            await api.voicePull("tts");
+            toast("Downloading the voice — try again in a minute");
+          },
+        });
+      } else toast("Couldn't speak that");
+    }
+  };
+
   // Push-to-talk: click to start, click to send (mic permission is the gesture).
   const toggleVoice = async () => {
     if (voiceBusy === "hearing") return;
@@ -512,6 +537,7 @@ export function App() {
           webRead={webRead}
           boughRef={boughRef}
           focusDay={route.day}
+          onSpeak={speak}
         />
         {proposing && !proposal && <p className="proposal-line pending">drafting the promise…</p>}
         {proposal && (
@@ -599,6 +625,11 @@ export function App() {
         }}
       />
       <Settings
+        autoSpeak={autoSpeak}
+        onAutoSpeak={(v: boolean) => {
+          setAutoSpeak(v);
+          localStorage.setItem("autoSpeak", v ? "1" : "0");
+        }}
         open={settings}
         hoot={hoots.find((h) => h.id === hootId()) ?? null}
         onClose={() => setSettings(false)}
@@ -707,6 +738,7 @@ function Items({
   webRead,
   boughRef,
   focusDay,
+  onSpeak,
 }: {
   items: Item[];
   hunts: Record<string, { id: string; goal: string | null }>;
@@ -719,6 +751,7 @@ function Items({
   webRead: number;
   boughRef: React.RefObject<HTMLDivElement | null>;
   focusDay: string | null;
+  onSpeak: (text: string) => void;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [digests, setDigests] = useState<Record<string, string | null>>({});
@@ -785,7 +818,7 @@ function Items({
                         ⌁ hunt · {hunts[it.thread_id].goal ?? "untitled"}
                       </p>
                     )}
-                    <ItemRow item={it} topic={topic} />
+                    <ItemRow item={it} topic={topic} onSpeak={onSpeak} />
                     {i === dayItems.length - 1 && thinking && <ThinkingCard startedAt={thinking.startedAt} />}
                   </React.Fragment>
                 ))}
@@ -902,7 +935,7 @@ function PendingRow({ p, onRetry }: { p: Pending; onRetry: () => void }) {
   );
 }
 
-function ItemRow({ item, topic }: { item: Item; topic: string | null }) {
+function ItemRow({ item, topic, onSpeak }: { item: Item; topic: string | null; onSpeak: (t: string) => void }) {
   const bubbleRef = useRef<HTMLDivElement>(null);
   let c: any = {};
   try {
@@ -933,6 +966,11 @@ function ItemRow({ item, topic }: { item: Item; topic: string | null }) {
         {mine ? <p className="plain">{String(c.text ?? "")}</p> : <Markdown text={String(c.text ?? "")} />}
       </div>
       <p className="meta">
+        {!mine && (
+          <button className="speak" onClick={() => onSpeak(c.text)} title="Speak" aria-label="Speak this reply">
+            ♪
+          </button>
+        )}
         {timeOf(item.created_at)}
         {item.surface === "telegram" && <span className="surface"> · via Telegram</span>}
         {/* `sent` only once the server item exists — nothing optimistic gets here */}

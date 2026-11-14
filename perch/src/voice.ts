@@ -3,12 +3,15 @@
 // sherpa-onnx, CPU only. The model is ~671 MB, lazily loaded, and unloaded
 // after idle so people who never speak keep a light daemon.
 
-import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
 import { logger } from "./log.js";
 
 export const VOICE_MODEL_ID = "parakeet-tdt-0.6b-v3-int8";
+// Voice out: a small Piper voice, same runtime as the recogniser.
+export const TTS_MODEL_ID = "csukuangfj/vits-piper-en_US-amy-low";
+const TTS_HF = `https://huggingface.co/${TTS_MODEL_ID}`;
 const HF_BASE = `https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main`;
 const FILES: { name: string; bytes: number }[] = [
   { name: "encoder.int8.onnx", bytes: 652282294 },
@@ -201,4 +204,187 @@ export async function transcribe(audio: Audio): Promise<string> {
 export async function transcribeBuffer(buf: Buffer, contentType = ""): Promise<string> {
   const audio = await decodeAudio(buf, contentType);
   return transcribe(audio);
+}
+
+
+// --- voice out (Piper / VITS) -------------------------------------------------
+
+export const ttsModelDir = () => path.join(config.dataDir, "models", "vits-piper-en_US-amy-low");
+
+let ttsPulling = false;
+let ttsPromise: Promise<void> | null = null;
+let tts: any = null;
+
+export function ttsStatus(): { present: boolean; loaded: boolean; pulling: boolean } {
+  const dir = ttsModelDir();
+  const present = existsSync(path.join(dir, "tokens.txt")) && existsSync(path.join(dir, "espeak-ng-data"));
+  return { present, loaded: tts !== null, pulling: ttsPulling };
+}
+
+/** Pull the voice once (files listed from the hub, fetched concurrently). */
+export function pullTtsModel(): Promise<void> {
+  if (ttsPromise) return ttsPromise;
+  ttsPulling = true;
+  ttsPromise = (async () => {
+    const dir = ttsModelDir();
+    mkdirSync(path.join(dir, "espeak-ng-data"), { recursive: true });
+    const listing = await fetch(`https://huggingface.co/api/models/${TTS_MODEL_ID}`, {
+      headers: { "user-agent": "hoots-perch" },
+    });
+    if (!listing.ok) throw new Error(`voice out listing: ${listing.status}`);
+    const tree: any = await listing.json();
+    if (!Array.isArray(tree.siblings)) throw new Error("voice out listing: no siblings");
+    const files: string[] = tree.siblings
+      .map((f: any) => f.rfilename as string)
+      .filter((f: string) => /\.(onnx|txt)$/.test(f) || f.startsWith("espeak-ng-data/"));
+    let next = 0;
+    const worker = async () => {
+      for (;;) {
+        const file = files[next++];
+        if (!file) return;
+        const target = path.join(dir, file);
+        if (existsSync(target)) continue;
+        mkdirSync(path.dirname(target), { recursive: true });
+        const res = await fetch(`${TTS_HF}/resolve/main/${file}`);
+        if (!res.ok) continue;
+        const buf = Buffer.from(await res.arrayBuffer());
+        const { writeFileSync } = await import("node:fs");
+        writeFileSync(target, buf);
+      }
+    };
+    await Promise.all(Array.from({ length: 8 }, worker));
+    logger.info("voice out: model ready", { dir, files: files.length });
+  })().finally(() => {
+    ttsPulling = false;
+    ttsPromise = null;
+  });
+  return ttsPromise;
+}
+
+async function getTts(): Promise<any> {
+  if (tts) return tts;
+  const mod: any = await import("sherpa-onnx-node");
+  const sherpa = mod.default ?? mod;
+  const dir = ttsModelDir();
+  tts = new sherpa.OfflineTts({
+    model: {
+      vits: {
+        model: path.join(dir, "en_US-amy-low.onnx"),
+        tokens: path.join(dir, "tokens.txt"),
+        dataDir: path.join(dir, "espeak-ng-data"),
+      },
+      numThreads: 2,
+      provider: "cpu",
+      debug: 0,
+    },
+    maxNumSentences: 1,
+  });
+  logger.info("voice out: loaded");
+  return tts;
+}
+
+// Phonemisation: sherpa's TTS config ignores dataDir, so espeak (WASM) gives
+// us IPA and we map it onto the voice's token table. Cached, single instance.
+let espeak: any = null;
+let phonemeTable: Set<string> | null = null;
+
+async function phonemize(text: string): Promise<string[][]> {
+  if (!espeak) {
+    const mod: any = await import("espeak-ng");
+    espeak = await (mod.default ?? mod)({});
+  }
+  if (!phonemeTable) {
+    const tokens = readFileSync(path.join(ttsModelDir(), "tokens.txt"), "utf8").trim().split("\n");
+    phonemeTable = new Set(tokens.map((l) => l.split(" ")[0]));
+  }
+  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean).slice(0, 12);
+  const out: string[][] = [];
+  for (const sentence of sentences) {
+    const outFile = `ph${Math.random().toString(36).slice(2)}`;
+    const inst = await (await import("espeak-ng")).default({
+      arguments: ["--phonout", outFile, '--sep=""', "-q", "-b=1", "--ipa=3", "-v", "en-us", JSON.stringify(sentence)],
+    } as any);
+    const ipa = String(inst.FS.readFile(outFile, { encoding: "utf8" })).replace(/\u200d/g, "").trim();
+    const tokens: string[] = [];
+    for (let i = 0; i < ipa.length; ) {
+      let matched: string | null = null;
+      for (const len of [3, 2, 1]) {
+        const cand = ipa.slice(i, i + len);
+        if (phonemeTable!.has(cand)) {
+          matched = cand;
+          break;
+        }
+      }
+      if (matched) {
+        tokens.push(matched);
+        i += matched.length;
+      } else {
+        i += 1;
+      }
+    }
+    if (tokens.length) out.push(tokens);
+  }
+  return out;
+}
+
+/** Strip what shouldn't be read out loud. */
+export function speakable(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, " code block ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*_#>]+/g, "")
+    .replace(/^\s*-\s*/gm, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 1500);
+}
+
+/** Synthesise speech; returns 16-bit mono WAV bytes. */
+export async function speak(rawText: string, speed = 1.0): Promise<Buffer> {
+  const text = speakable(rawText);
+  if (!text) throw new Error("nothing to say");
+  const engine = await getTts();
+  const sentences = await phonemize(text);
+  if (!sentences.length) throw new Error("nothing to say");
+  const chunks: Float32Array[] = [];
+  let rate = 16000;
+  for (const tokens of sentences) {
+    const audio = await engine.generateAsync({ text: "", sid: 0, speed, generationConfig: { tokens: [tokens] } });
+    if (audio.samples?.length) {
+      chunks.push(audio.samples as Float32Array);
+      rate = audio.sampleRate as number;
+    }
+  }
+  if (!chunks.length) throw new Error("TTS generation produced no audio");
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const merged = new Float32Array(total);
+  let at = 0;
+  for (const c of chunks) {
+    merged.set(c, at);
+    at += c.length;
+  }
+  return encodeWav16(merged, rate);
+}
+
+export function encodeWav16(samples: Float32Array, rate: number): Buffer {
+  const buf = Buffer.alloc(44 + samples.length * 2);
+  buf.write("RIFF", 0);
+  buf.writeUInt32LE(36 + samples.length * 2, 4);
+  buf.write("WAVE", 8);
+  buf.write("fmt ", 12);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(rate, 24);
+  buf.writeUInt32LE(rate * 2, 28);
+  buf.writeUInt16LE(2, 32);
+  buf.writeUInt16LE(16, 34);
+  buf.write("data", 36);
+  buf.writeUInt32LE(samples.length * 2, 40);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    buf.writeInt16LE(Math.round(s * 32767), 44 + i * 2);
+  }
+  return buf;
 }
