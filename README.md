@@ -54,6 +54,23 @@ was cut.
 One process owns all state. The UI holds none: it is a view over the API, and
 the same conversation can happen from Telegram.
 
+## Desktop app
+
+Parliament runs as a local web app; the desktop shell (Tauri 2) adds what a tab
+can't: a tray presence, close-to-tray, single instance, and a `hoots://` scheme.
+
+```bash
+npm run dev -w perch          # the daemon must be running
+npm run dev -w @hoots/desktop # the shell, pointed at 127.0.0.1:7420
+```
+
+Builds for macOS and Windows are produced by `.github/workflows/desktop.yml`.
+The shell expects a running perch (bring your own for now); a managed installer
+is on the roadmap.
+
+You can also install the web app itself: Chrome/Edge → Install, or the browser's
+"You can install this app" affordance. It gets its own window and icon.
+
 ## Quick start
 
 ```bash

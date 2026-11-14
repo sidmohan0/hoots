@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Hoots",
+  "version": "0.1.0",
+  "identifier": "com.hoots.desktop",
+  "build": {
+    "frontendDist": "../../parliament/dist",
+    "beforeBuildCommand": "npm run build -w parliament"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Parliament",
+        "url": "http://127.0.0.1:7420",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 960,
+        "minHeight": 600,
+        "resizable": true,
+        "titleBarStyle": "Transparent"
+      }
+    ],
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true
+    },
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["hoots"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Productivity",
+    "shortDescription": "Always-on personal agents that live on your machine",
+    "longDescription": "Hoots is a desktop shell for the perch: always-on personal agents that remember across sessions, check in on a schedule, and talk to you on Telegram or in the app. All state lives on your own machine.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

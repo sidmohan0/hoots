@@ -6,14 +6,16 @@
   "license": "MIT",
   "workspaces": [
     "perch",
-    "parliament"
+    "parliament",
+    "desktop"
   ],
   "scripts": {
     "dev": "npm run dev -w perch",
     "build": "npm run build -w perch",
     "test": "vitest run",
     "lint": "oxlint perch/src perch/test parliament/src",
-    "typecheck": "npm run typecheck -w perch && npm run typecheck -w parliament"
+    "typecheck": "npm run typecheck -w perch && npm run typecheck -w parliament",
+    "desktop": "npm run build -w @hoots/desktop"
   },
   "engines": {
     "node": ">=22"
