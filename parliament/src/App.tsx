@@ -6,6 +6,7 @@ import { Markdown } from "./markdown";
 import { Toaster, toast } from "./toast";
 import { looksLikePromise, proposePromise, PromiseCard, type Proposal } from "./PromiseCard";
 import { DaySpine } from "./DaySpine";
+import { startRecording, toWav16k } from "./voice";
 import { Command } from "./Command";
 import { EmptyBough, NewHoot } from "./Onboarding";
 import { Settings } from "./Settings";
@@ -67,6 +68,8 @@ export function App() {
   const [proposing, setProposing] = useState(false);
   const [proposalText, setProposalText] = useState("");
   const [runs, setRuns] = useState<any[]>([]);
+  const [rec, setRec] = useState<{ stop: () => Promise<{ blob: Blob; ms: number }> } | null>(null);
+  const [voiceBusy, setVoiceBusy] = useState<"idle" | "recording" | "hearing">("idle");
   // hunts are never pages: their turns render inline in the bough under a
   // header row, keyed by thread. Hunt goals come from the thread list.
   const [hunts, setHunts] = useState<Record<string, { id: string; goal: string | null }>>({});
@@ -363,6 +366,49 @@ export function App() {
 
   const retry = (p: Pending) => postTurn(p.tid, p.text);
 
+  // Push-to-talk: click to start, click to send (mic permission is the gesture).
+  const toggleVoice = async () => {
+    if (voiceBusy === "hearing") return;
+    if (!rec) {
+      try {
+        setRec(await startRecording());
+        setVoiceBusy("recording");
+      } catch {
+        toast("No microphone — check permissions");
+      }
+      return;
+    }
+    const active = rec;
+    setRec(null);
+    setVoiceBusy("hearing");
+    try {
+      const { blob, ms } = await active.stop();
+      if (ms < 400) {
+        setVoiceBusy("idle");
+        return; // a tap, not speech
+      }
+      const wav = await toWav16k(blob);
+      const res = await api.voiceTurn(hootId(), wav);
+      if ("needsModel" in res) {
+        setVoiceBusy("idle");
+        toast("Voice needs a one-time model (671 MB)", {
+          label: "download",
+          run: async () => {
+            await api.voicePull();
+            toast("Downloading the voice model — try the mic in a minute");
+          },
+        });
+        return;
+      }
+      setVoiceBusy("idle");
+      setReplies(0);
+      atBottom.current = true;
+    } catch (err: any) {
+      setVoiceBusy("idle");
+      toast(String(err?.message ?? "Didn't catch that · try again"));
+    }
+  };
+
   // Every drawer write goes through here so a failure is one toast with a retry.
   const factAction = (run: () => Promise<unknown>) => {
     run()
@@ -481,7 +527,13 @@ export function App() {
             }}
           />
         )}
-        <Composer onSend={send} busy={!!thinking} inputRef={composerRef} />
+        <Composer
+          onSend={send}
+          busy={!!thinking}
+          inputRef={composerRef}
+          voice={voiceBusy}
+          onVoice={toggleVoice}
+        />
       </main>
 
       {replies > 0 && (
@@ -912,17 +964,21 @@ function Composer({
   onSend,
   busy,
   inputRef,
+  voice,
+  onVoice,
 }: {
   onSend: (text: string) => void;
   busy: boolean;
-  inputRef: React.RefObject<HTMLInputElement | null>;
+  inputRef?: React.RefObject<HTMLInputElement | null>;
+  voice?: "idle" | "recording" | "hearing";
+  onVoice?: () => void;
 }) {
   const [text, setText] = useState("");
   // empty-state chips fill the composer instead of sending
   useEffect(() => {
     const fill = (e: Event) => {
       setText((e as CustomEvent<string>).detail);
-      inputRef.current?.focus();
+      inputRef?.current?.focus();
     };
     addEventListener(COMPOSE_EVENT, fill);
     return () => removeEventListener(COMPOSE_EVENT, fill);
@@ -936,6 +992,15 @@ function Composer({
   };
   return (
     <form className="composer" onSubmit={submit}>
+      <button
+        type="button"
+        className={`mic ${voice ?? "idle"}`}
+        onClick={onVoice}
+        aria-label={voice === "recording" ? "Stop and send" : "Speak"}
+        title={voice === "recording" ? "Stop and send" : voice === "hearing" ? "Hearing…" : "Hold to talk"}
+      >
+        {voice === "hearing" ? "…" : "🎙"}
+      </button>
       <input
         id="composer-input"
         ref={inputRef}

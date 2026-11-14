@@ -494,3 +494,16 @@ mark.hl { background: var(--c-accent-wash); color: var(--c-text); border-radius:
   .spine { display: block; }
   .days { flex: 1; }
 }
+
+/* screech mic */
+.mic {
+  width: 44px; height: 44px; flex: none; border-radius: var(--radius-pill);
+  border: 1px solid var(--c-line); background: var(--c-surface); font-size: 16px;
+  display: grid; place-items: center; color: var(--c-text);
+}
+.mic:hover { background: var(--c-bg-sunken); }
+.mic.recording { border-color: var(--c-quiet); box-shadow: 0 0 0 3px var(--c-quiet-wash); animation: mic-pulse 1.4s ease-in-out infinite; }
+.mic.hearing { color: var(--c-accent-text); border-color: var(--c-accent-line); }
+.mic:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+@keyframes mic-pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+@media (prefers-reduced-motion: reduce) { .mic.recording { animation: none; box-shadow: 0 0 0 3px var(--c-quiet-wash); } }

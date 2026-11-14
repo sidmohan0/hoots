@@ -54,6 +54,21 @@ was cut.
 One process owns all state. The UI holds none: it is a view over the API, and
 the same conversation can happen from Telegram.
 
+## Voice (screech)
+
+Speech in runs entirely on your machine: **Parakeet TDT 0.6B v3** (25 languages,
+int8 ONNX) via sherpa-onnx, CPU only, ~28× realtime. The model is 671 MB, pulled
+on first use and cached under `~/.hoots/models/`:
+
+```bash
+curl -X POST localhost:7420/v1/voice/model/pull -H "Authorization: Bearer $PERCH_AUTH_TOKEN"
+```
+
+Then either speak in the app (the mic in the composer) or send voice notes on
+Telegram. Audio is transcribed to a normal turn — same ledger, same surfaces.
+The recogniser unloads after five idle minutes, so people who never speak keep a
+light daemon. Speech *out* (Piper) is the next step.
+
 ## Desktop app
 
 Parliament runs as a local web app; the desktop shell (Tauri 2) adds what a tab

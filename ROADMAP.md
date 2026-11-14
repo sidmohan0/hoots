@@ -1,3 +1,11 @@
+# Done (v0.4)
+
+- Screech v1: Parakeet TDT 0.6B v3 in-process (sherpa-onnx), push-to-talk in the
+  app, voice notes as turns, model pull + idle unload
+- Desktop shell (Tauri 2): tray, close-to-tray, single instance, hoots:// scheme
+- PWA: installable, shell cache
+- Byte-range ops: rate limits, webhooks, backups, migrations, OpenAPI, lint
+
 # Done (v0.3)
 
 - Turn queueing, live turn card, optimistic send, reply pill, away divider

@@ -16,6 +16,7 @@ import { bus } from "./stream.js";
 import { bindChannel, channelForChat } from "./herald-telegram.js";
 import { bindSurface, channelFor } from "./herald.js";
 import { deriveTopics } from "./topics.js";
+import { modelStatus, pullModel, transcribeBuffer } from "./voice.js";
 
 type Post = { body: any; params: any; query: any };
 
@@ -270,6 +271,56 @@ export function buildServer() {
          ORDER BY r.scheduled_at`
       )
       .all(req.params.id, start, end);
+  });
+
+  // --- screech v1: local speech in (Parakeet via sherpa-onnx) ---
+  app.addContentTypeParser(
+    /^audio\/.*/,
+    { parseAs: "buffer", bodyLimit: 25 * 1024 * 1024 },
+    (_req, body, done) => done(null, body)
+  );
+  app.addContentTypeParser(
+    "application/octet-stream",
+    { parseAs: "buffer", bodyLimit: 25 * 1024 * 1024 },
+    (_req, body, done) => done(null, body)
+  );
+
+  app.get("/v1/voice/status", async () => modelStatus());
+  app.post("/v1/voice/model/pull", async (_req, reply) => {
+    pullModel().catch((err) => bus.publish({ event: "turn.status", data: { voice_pull_error: String(err) } }));
+    return reply.code(202).send({ ...modelStatus(), pulling: true });
+  });
+  app.post("/v1/voice/transcribe", async (req: any, reply: Reply) => {
+    const status = modelStatus();
+    if (!status.present) return reply.code(409).send({ error: "voice model missing", needsModel: true });
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from([]);
+    if (!body.length) return reply.code(400).send({ error: "empty audio" });
+    try {
+      const text = await transcribeBuffer(body, req.headers["content-type"] ?? "");
+      return { text };
+    } catch (err: any) {
+      return reply.code(422).send({ error: `transcription failed: ${err?.message ?? err}` });
+    }
+  });
+  // Voice in → normal turn. Same ledger, same surface rules.
+  app.post("/v1/hoots/:id/voice/turn", async (req: any, reply: Reply) => {
+    const status = modelStatus();
+    if (!status.present) return reply.code(409).send({ error: "voice model missing", needsModel: true });
+    const thread = db
+      .prepare(`SELECT id FROM threads WHERE hoot_id = ? AND kind = 'bough'`)
+      .get(req.params.id) as any;
+    if (!thread) return reply.code(404).send({ error: "no bough" });
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from([]);
+    if (!body.length) return reply.code(400).send({ error: "empty audio" });
+    let text: string;
+    try {
+      text = await transcribeBuffer(body, req.headers["content-type"] ?? "");
+    } catch (err: any) {
+      return reply.code(422).send({ error: `transcription failed: ${err?.message ?? err}` });
+    }
+    if (!text) return reply.code(422).send({ error: "heard nothing" });
+    const { turnId, queued } = await startTurn({ threadId: thread.id, trigger: "user", message: text, surface: "web" });
+    return reply.code(202).send({ turn_id: turnId, queued, transcript: text });
   });
 
   // --- presence (board 04B: one line, third person) ---

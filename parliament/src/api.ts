@@ -54,6 +54,18 @@ export const api = {
   patchAutomation: (id: string, body: any) => req<any>(`/v1/automations/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   outbound: () => req<{ count: number; bytes: number }>("/v1/outbound/today"),
   pellet: (hootId: string) => req<any>(`/v1/hoots/${hootId}/pellet`),
+  voiceStatus: () => req<{ present: boolean; bytes: number; expected: number; loaded: boolean; pulling: boolean }>("/v1/voice/status"),
+  voicePull: () => req<any>("/v1/voice/model/pull", { method: "POST" }),
+  voiceTurn: async (hootId: string, wav: Blob) => {
+    const res = await fetch(`/v1/hoots/${hootId}/voice/turn`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token()}`, "content-type": "audio/wav" },
+      body: wav,
+    });
+    if (res.status === 409) return { needsModel: true as const };
+    if (!res.ok) throw new Error(`voice turn → ${res.status}`);
+    return res.json() as Promise<{ turn_id: string; queued: boolean; transcript: string }>;
+  },
   topics: (hootId: string, q: string) =>
     req<{ topic: string; count: number }[]>(`/v1/topics?hoot=${encodeURIComponent(hootId)}&q=${encodeURIComponent(q)}`),
 };
